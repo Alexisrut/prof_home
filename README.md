@@ -26,20 +26,16 @@ pip install -r prof_back/requirements.txt
 ### 3. Запуск сервера
 
 ```bash
-uvicorn prof_back.main:app --reload
+uvicorn main:app --reload
 ```
 
 По умолчанию сервер поднимется на `http://127.0.0.1:8000`.
-
-Интерактивная документация FastAPI:
-- Swagger UI: `http://127.0.0.1:8000/docs`
-- ReDoc: `http://127.0.0.1:8000/redoc`
 
 База данных создаётся автоматически в файле `profcom.db` (SQLite) в корне проекта.
 
 ---
 
-## Модель данных (упрощённо)
+## Модель данных
 
 ### Таблица `users`
 
