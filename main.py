@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Query
 from pydantic import BaseModel, EmailStr
 
-from .database import db
-from .models import ContactInfo, User, Guide
+from database import db
+from models import ContactInfo, User, Guide
 
 
 app = FastAPI(title="Profcom backend")
@@ -18,8 +18,11 @@ class AuthUser(BaseModel):
     user_id: int
 
 
-def get_current_user(user_id: int) -> User:
-    user = db.get_user(user_id)
+def get_current_user(auth_id: int = Query(..., alias="auth_id")) -> User:
+    """
+    Получаем текущего пользователя по query-параметру ?auth_id=...
+    """
+    user = db.get_user(auth_id)
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     return user

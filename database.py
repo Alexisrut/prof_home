@@ -13,7 +13,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
 
-from .models import User as UserDC, ContactInfo as ContactInfoDC, Guide as GuideDC
+from models import User as UserDC, ContactInfo as ContactInfoDC, Guide as GuideDC
 
 
 DATABASE_URL = "sqlite:///./profcom.db"
