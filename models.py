@@ -42,3 +42,30 @@ class Guide:
 
 
 
+
+# ── Add to your existing User model / dataclass ───────────
+# If your User is a dataclass:
+
+from dataclasses import dataclass, field
+from typing import Optional
+from datetime import datetime
+
+@dataclass
+class User:
+    user_id: int
+    user_name: str
+    hashed_password: str          # ← NEW FIELD
+    kkr_score: int
+    group_number: str
+    blocks: str
+    banned: bool = False
+    super_user: bool = False
+    admin: bool = False
+
+
+# ── New tiny model for refresh tokens ─────────────────────
+@dataclass
+class RefreshToken:
+    token: str
+    user_id: int
+    expires_at: datetime

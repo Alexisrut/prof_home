@@ -2,45 +2,32 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends
 from pydantic import BaseModel, EmailStr
 
 from database import db
 from models import ContactInfo, User, Guide
 
+# ── Import the NEW auth module instead of inline helpers ───
+from auth import (
+    hash_password,
+    verify_password,
+    create_token_pair,
+    refresh_tokens,
+    revoke_refresh_token,
+    revoke_all_user_tokens,
+    get_current_user,      # replaces old get_current_user
+    require_admin,         # replaces old require_admin
+    require_superuser,     # replaces old require_superuser
+)
+
 
 app = FastAPI(title="Profcom backend")
 
 
-# --- Auth / permissions (simplified) ---
-
-class AuthUser(BaseModel):
-    user_id: int
-
-
-def get_current_user(auth_id: int = Query(..., alias="auth_id")) -> User:
-    """
-    Получаем текущего пользователя по query-параметру ?auth_id=...
-    """
-    user = db.get_user(auth_id)
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-    return user
-
-
-def require_admin(cur: User = Depends(get_current_user)) -> User:
-    if not cur.admin and not cur.super_user:
-        raise HTTPException(status_code=403, detail="Admin rights required")
-    return cur
-
-
-def require_superuser(cur: User = Depends(get_current_user)) -> User:
-    if not cur.super_user:
-        raise HTTPException(status_code=403, detail="SuperUser rights required")
-    return cur
-
-
-# --- Schemas ---
+# ═══════════════════════════════════════════════════════════
+#  SCHEMAS
+# ═══════════════════════════════════════════════════════════
 
 class ContactInfoIn(BaseModel):
     fio: str
@@ -58,6 +45,7 @@ class ContactInfoIn(BaseModel):
 
 class UserIn(BaseModel):
     user_name: str
+    password: str                    # ← NEW: plain-text password from client
     kkr_score: int
     group_number: str
     blocks: str
@@ -92,11 +80,61 @@ class GuideOut(GuideIn):
     guide_id: int
 
 
-# --- Registration / login ---
+class TokenPair(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
 
-@app.post("/register", response_model=UserOut)
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class LoginIn(BaseModel):
+    user_name: str
+    password: str
+
+
+class ProfileUpdate(BaseModel):
+    fio: Optional[str] = None
+    kkr_name: Optional[str] = None
+    group_number: Optional[str] = None
+    location: Optional[str] = None
+    blocks: Optional[str] = None
+    phone: Optional[str] = None
+    vk: Optional[str] = None
+    tg: Optional[str] = None
+    email: Optional[EmailStr] = None
+    budget: Optional[bool] = None
+    in_profcom: Optional[bool] = None
+
+
+class ContactFilter(BaseModel):
+    group_number: Optional[str] = None
+    blocks: Optional[str] = None
+    in_profcom: Optional[bool] = None
+    budget: Optional[bool] = None
+
+
+# ═══════════════════════════════════════════════════════════
+#  AUTH ENDPOINTS  (NEW)
+# ═══════════════════════════════════════════════════════════
+
+@app.post("/auth/register", response_model=TokenPair, status_code=201)
 def register(contact: ContactInfoIn, user_in: UserIn):
-    """POST: registration – create contact_info + user."""
+    """
+    Register a new user.
+    Body JSON:
+    {
+      "contact": { ... },
+      "user_in": { "user_name": "...", "password": "...", ... }
+    }
+    Returns access + refresh tokens immediately.
+    """
+    # Check duplicate
+    if db.get_user_by_name(user_in.user_name):
+        raise HTTPException(409, "User name already taken")
+
     contact_model = ContactInfo(
         user_id=0,
         fio=contact.fio,
@@ -114,6 +152,7 @@ def register(contact: ContactInfoIn, user_in: UserIn):
     user_model = User(
         user_id=0,
         user_name=user_in.user_name,
+        hashed_password=hash_password(user_in.password),   # ← hash!
         kkr_score=user_in.kkr_score,
         group_number=user_in.group_number,
         blocks=user_in.blocks,
@@ -122,147 +161,137 @@ def register(contact: ContactInfoIn, user_in: UserIn):
         admin=user_in.admin,
     )
     created = db.create_user_with_contact(contact_model, user_model)
-    return UserOut(**created.__dict__)
+
+    # Return tokens so the user is logged-in right away
+    return create_token_pair(created.user_id)
 
 
-@app.get("/login", response_model=UserOut)
-def login(user_name: str):
-    """GET: login by name, returns user info."""
-    user = db.get_user_by_name(user_name)
+@app.post("/auth/login", response_model=TokenPair)
+def login(body: LoginIn):
+    """
+    Authenticate with user_name + password → get tokens.
+    """
+    user = db.get_user_by_name(body.user_name)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return UserOut(**user.__dict__)
+        raise HTTPException(401, "Invalid credentials")
+
+    if not verify_password(body.password, user.hashed_password):
+        raise HTTPException(401, "Invalid credentials")
+
+    if user.banned:
+        raise HTTPException(403, "User is banned")
+
+    return create_token_pair(user.user_id)
 
 
-# --- Profile page ---
+@app.post("/auth/refresh", response_model=TokenPair)
+def refresh(body: RefreshRequest):
+    """
+    Exchange a refresh token for a new access + refresh pair.
+    Old refresh token is deleted (rotation).
+    """
+    return refresh_tokens(body.refresh_token)
+
+
+@app.post("/auth/logout")
+def logout(
+    body: RefreshRequest,
+    cur: User = Depends(get_current_user),    # must be authenticated
+):
+    """Revoke a single refresh token (one device)."""
+    revoke_refresh_token(body.refresh_token)
+    return {"detail": "Logged out"}
+
+
+@app.post("/auth/logout-all")
+def logout_all(cur: User = Depends(get_current_user)):
+    """Revoke ALL refresh tokens for the current user."""
+    revoke_all_user_tokens(cur.user_id)
+    return {"detail": "Logged out from all devices"}
+
+
+# ═══════════════════════════════════════════════════════════
+#  PROFILE   (protected by Bearer token now)
+# ═══════════════════════════════════════════════════════════
+
+@app.get("/profile/me", response_model=UserOut)
+def my_profile(cur: User = Depends(get_current_user)):
+    """Return the profile of the currently authenticated user."""
+    return UserOut(**cur.__dict__)
+
 
 @app.get("/profile/{user_id}", response_model=UserOut)
 def get_profile(user_id: int):
     user = db.get_user(user_id)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(404, "User not found")
     return UserOut(**user.__dict__)
-
-
-class ProfileUpdate(BaseModel):
-    # fields that can be updated in both user and contact_info
-    fio: Optional[str] = None
-    kkr_name: Optional[str] = None
-    group_number: Optional[str] = None
-    location: Optional[str] = None
-    blocks: Optional[str] = None
-    phone: Optional[str] = None
-    vk: Optional[str] = None
-    tg: Optional[str] = None
-    email: Optional[EmailStr] = None
-    budget: Optional[bool] = None
-    in_profcom: Optional[bool] = None
 
 
 @app.patch("/profile/{user_id}", response_model=UserOut)
 def update_profile(
     user_id: int,
     payload: ProfileUpdate,
-    cur: User = Depends(get_current_user),
+    cur: User = Depends(get_current_user),         # ← Bearer token now
 ):
-    """
-    UPDATE contact_info/user – allowed for the user themself or any admin.
-    """
     target = db.get_user(user_id)
     if not target:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(404, "User not found")
     if cur.user_id != user_id and not (cur.admin or cur.super_user):
-        raise HTTPException(status_code=403, detail="Forbidden")
+        raise HTTPException(403, "Forbidden")
 
-    # update contact info
     db.update_contact(
         user_id,
-        fio=payload.fio,
-        kkr_name=payload.kkr_name,
-        group_number=payload.group_number,
-        location=payload.location,
-        blocks=payload.blocks,
-        phone=payload.phone,
-        vk=payload.vk,
-        tg=payload.tg,
-        email=payload.email,
-        budget=payload.budget,
+        fio=payload.fio, kkr_name=payload.kkr_name,
+        group_number=payload.group_number, location=payload.location,
+        blocks=payload.blocks, phone=payload.phone,
+        vk=payload.vk, tg=payload.tg,
+        email=payload.email, budget=payload.budget,
         in_profcom=payload.in_profcom,
     )
-    # sync some fields to user entity
-    db.update_user(
-        user_id,
-        group_number=payload.group_number,
-        blocks=payload.blocks,
-    )
+    db.update_user(user_id, group_number=payload.group_number, blocks=payload.blocks)
     updated = db.get_user(user_id)
     return UserOut(**updated.__dict__)
 
 
 @app.delete("/profile/{user_id}")
-def delete_user(
-    user_id: int,
-    cur: User = Depends(require_superuser),
-):
-    """DELETE user – only SuperUser."""
+def delete_user(user_id: int, cur: User = Depends(require_superuser)):
     if not db.get_user(user_id):
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(404, "User not found")
     db.delete_user(user_id)
     return {"status": "deleted"}
 
 
-# --- Guides page ---
+# ═══════════════════════════════════════════════════════════
+#  GUIDES
+# ═══════════════════════════════════════════════════════════
 
 @app.get("/guides", response_model=List[GuideOut])
 def list_guides():
-    guides = db.list_guides()
-    return [GuideOut(**g.__dict__) for g in guides]
+    return [GuideOut(**g.__dict__) for g in db.list_guides()]
 
 
 @app.post("/guides", response_model=GuideOut)
-def create_or_edit_guide(
-    guide: GuideIn,
-    cur: User = Depends(require_admin),
-):
-    g = Guide(
-        guide_id=0,
-        title=guide.title,
-        owner_block=guide.owner_block,
-        text=guide.text,
-        original_link=guide.original_link,
-    )
+def create_guide(guide: GuideIn, cur: User = Depends(require_admin)):
+    g = Guide(guide_id=0, title=guide.title, owner_block=guide.owner_block,
+              text=guide.text, original_link=guide.original_link)
     created = db.create_guide(g)
     return GuideOut(**created.__dict__)
 
 
-# --- Contact info page ---
+# ═══════════════════════════════════════════════════════════
+#  CONTACTS
+# ═══════════════════════════════════════════════════════════
 
 @app.get("/contacts", response_model=List[ContactInfoOut])
 def get_all_contacts():
-    contacts = db.list_contacts()
-    return [ContactInfoOut(**c.__dict__) for c in contacts]
-
-
-class ContactFilter(BaseModel):
-    group_number: Optional[str] = None
-    blocks: Optional[str] = None
-    in_profcom: Optional[bool] = None
-    budget: Optional[bool] = None
+    return [ContactInfoOut(**c.__dict__) for c in db.list_contacts()]
 
 
 @app.post("/contacts/filter", response_model=List[ContactInfoOut])
-def filter_contacts(
-    filt: ContactFilter,
-    cur: User = Depends(require_admin),
-):
-    crit = {
-        "group_number": filt.group_number,
-        "blocks": filt.blocks,
-        "in_profcom": filt.in_profcom,
-        "budget": filt.budget,
-    }
-    contacts = db.filter_contacts(**crit)
+def filter_contacts(filt: ContactFilter, cur: User = Depends(require_admin)):
+    contacts = db.filter_contacts(
+        group_number=filt.group_number, blocks=filt.blocks,
+        in_profcom=filt.in_profcom, budget=filt.budget,
+    )
     return [ContactInfoOut(**c.__dict__) for c in contacts]
-
-
-

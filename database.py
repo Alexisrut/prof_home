@@ -111,7 +111,7 @@ def _guide_orm_to_dc(g: GuideORM) -> GuideDC:
     )
 
 
-class DB:
+class db:
     """SQLAlchemy-backed database layer."""
 
     def __init__(self) -> None:
@@ -269,8 +269,65 @@ class DB:
             session.refresh(g)
             return _guide_orm_to_dc(g)
 
+from datetime import datetime, timezone
 
-# global singleton for now
-db = DB()
+class Database:
+    # ... your existing code ...
 
+    # ══════════════════════════════════════════════════════
+    #  REFRESH TOKENS  (add these methods)
+    # ══════════════════════════════════════════════════════
 
+    def save_refresh_token(self, token: str, user_id: int, expires_at: datetime):
+        """
+        INSERT a refresh token row.
+        SQL example:
+            INSERT INTO refresh_tokens (token, user_id, expires_at)
+            VALUES (?, ?, ?)
+        """
+        cur = self.conn.cursor()
+        cur.execute(
+            "INSERT INTO refresh_tokens (token, user_id, expires_at) VALUES (?, ?, ?)",
+            (token, user_id, expires_at.isoformat()),
+        )
+        self.conn.commit()
+
+    def get_refresh_token(self, token: str) -> dict | None:
+        """
+        SELECT * FROM refresh_tokens WHERE token = ?
+        Returns dict {"token", "user_id", "expires_at"} or None.
+        """
+        cur = self.conn.cursor()
+        cur.execute("SELECT token, user_id, expires_at FROM refresh_tokens WHERE token = ?", (token,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "token":      row[0],
+            "user_id":    row[1],
+            "expires_at": datetime.fromisoformat(row[2]).replace(tzinfo=timezone.utc),
+        }
+
+    def delete_refresh_token(self, token: str):
+        """DELETE FROM refresh_tokens WHERE token = ?"""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM refresh_tokens WHERE token = ?", (token,))
+        self.conn.commit()
+
+    def delete_all_refresh_tokens(self, user_id: int):
+        """DELETE FROM refresh_tokens WHERE user_id = ?"""
+        cur = self.conn.cursor()
+        cur.execute("DELETE FROM refresh_tokens WHERE user_id = ?", (user_id,))
+        self.conn.commit()
+
+    def _ensure_tables(self):
+        """Call once on startup. Add to your existing table-creation logic."""
+        cur = self.conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                token      TEXT PRIMARY KEY,
+                user_id    INTEGER NOT NULL,
+                expires_at TEXT    NOT NULL
+            )
+        """)
+        self.conn.commit()
