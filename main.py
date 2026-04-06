@@ -7,7 +7,7 @@ from pydantic import BaseModel, EmailStr
 
 from database import db
 from models import ContactInfo, User, Guide
-
+import logging
 # ── Import the NEW auth module instead of inline helpers ───
 from auth import (
     hash_password,
@@ -24,7 +24,11 @@ from auth import (
 
 app = FastAPI(title="Profcom backend")
 
-
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════
 #  SCHEMAS
 # ═══════════════════════════════════════════════════════════
@@ -131,8 +135,9 @@ def register(contact: ContactInfoIn, user_in: UserIn):
     }
     Returns access + refresh tokens immediately.
     """
+    logger.info(f"Arguments: {user_in.model_dump_json()}")
     # Check duplicate
-    if db.get_user_by_name(user_in.user_name):
+    if db.get_user_by_name(user_name=user_in.user_name):
         raise HTTPException(409, "User name already taken")
 
     contact_model = ContactInfo(

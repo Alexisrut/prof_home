@@ -1,19 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import List, Optional
 
-from sqlalchemy import (
-    Boolean,
-    Column,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    create_engine,
-)
-from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
+from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text, create_engine, text
+from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
-from models import User as UserDC, ContactInfo as ContactInfoDC, Guide as GuideDC
+from models import ContactInfo as ContactInfoDC, Guide as GuideDC, User as UserDC
 
 
 DATABASE_URL = "sqlite:///./profcom.db"
@@ -29,6 +22,7 @@ class UserORM(Base):
 
     user_id = Column(Integer, primary_key=True, autoincrement=True)
     user_name = Column(String, nullable=False)
+    hashed_password = Column(String, nullable=False, default="")
     kkr_score = Column(Integer, nullable=False)
     group_number = Column(String, nullable=False)
     blocks = Column(String, nullable=False)
@@ -68,13 +62,36 @@ class GuideORM(Base):
     original_link = Column(String, nullable=True)
 
 
+class RefreshTokenORM(Base):
+    __tablename__ = "refresh_tokens"
+
+    token = Column(String, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    expires_at = Column(String, nullable=False)
+
+
 Base.metadata.create_all(bind=engine)
+
+
+def _ensure_sqlite_users_password_column() -> None:
+    """Add hashed_password to existing SQLite DBs created before auth."""
+    with engine.begin() as conn:
+        rows = conn.execute(text("PRAGMA table_info(users)")).fetchall()
+        col_names = {r[1] for r in rows}
+        if "hashed_password" not in col_names:
+            conn.execute(
+                text("ALTER TABLE users ADD COLUMN hashed_password VARCHAR NOT NULL DEFAULT ''")
+            )
+
+
+_ensure_sqlite_users_password_column()
 
 
 def _user_orm_to_dc(u: UserORM) -> UserDC:
     return UserDC(
         user_id=u.user_id,
         user_name=u.user_name,
+        hashed_password=u.hashed_password,
         kkr_score=u.kkr_score,
         group_number=u.group_number,
         blocks=u.blocks,
@@ -111,7 +128,7 @@ def _guide_orm_to_dc(g: GuideORM) -> GuideDC:
     )
 
 
-class db:
+class Database:
     """SQLAlchemy-backed database layer."""
 
     def __init__(self) -> None:
@@ -130,6 +147,7 @@ class db:
         with self._session() as session:
             u = UserORM(
                 user_name=user.user_name,
+                hashed_password=user.hashed_password,
                 kkr_score=user.kkr_score,
                 group_number=user.group_number,
                 blocks=user.blocks,
@@ -180,6 +198,9 @@ class db:
 
     def delete_user(self, user_id: int) -> None:
         with self._session() as session:
+            session.query(RefreshTokenORM).filter(RefreshTokenORM.user_id == user_id).delete(
+                synchronize_session=False
+            )
             u = session.get(UserORM, user_id)
             if u:
                 session.delete(u)
@@ -269,65 +290,45 @@ class db:
             session.refresh(g)
             return _guide_orm_to_dc(g)
 
-from datetime import datetime, timezone
+    # --- Refresh tokens ---
 
-class Database:
-    # ... your existing code ...
-
-    # ══════════════════════════════════════════════════════
-    #  REFRESH TOKENS  (add these methods)
-    # ══════════════════════════════════════════════════════
-
-    def save_refresh_token(self, token: str, user_id: int, expires_at: datetime):
-        """
-        INSERT a refresh token row.
-        SQL example:
-            INSERT INTO refresh_tokens (token, user_id, expires_at)
-            VALUES (?, ?, ?)
-        """
-        cur = self.conn.cursor()
-        cur.execute(
-            "INSERT INTO refresh_tokens (token, user_id, expires_at) VALUES (?, ?, ?)",
-            (token, user_id, expires_at.isoformat()),
-        )
-        self.conn.commit()
+    def save_refresh_token(self, token: str, user_id: int, expires_at: datetime) -> None:
+        with self._session() as session:
+            session.add(
+                RefreshTokenORM(
+                    token=token,
+                    user_id=user_id,
+                    expires_at=expires_at.isoformat(),
+                )
+            )
+            session.commit()
 
     def get_refresh_token(self, token: str) -> dict | None:
-        """
-        SELECT * FROM refresh_tokens WHERE token = ?
-        Returns dict {"token", "user_id", "expires_at"} or None.
-        """
-        cur = self.conn.cursor()
-        cur.execute("SELECT token, user_id, expires_at FROM refresh_tokens WHERE token = ?", (token,))
-        row = cur.fetchone()
-        if not row:
-            return None
-        return {
-            "token":      row[0],
-            "user_id":    row[1],
-            "expires_at": datetime.fromisoformat(row[2]).replace(tzinfo=timezone.utc),
-        }
+        with self._session() as session:
+            row = session.get(RefreshTokenORM, token)
+            if not row:
+                return None
+            return {
+                "token": row.token,
+                "user_id": row.user_id,
+                "expires_at": datetime.fromisoformat(row.expires_at).replace(
+                    tzinfo=timezone.utc
+                ),
+            }
 
-    def delete_refresh_token(self, token: str):
-        """DELETE FROM refresh_tokens WHERE token = ?"""
-        cur = self.conn.cursor()
-        cur.execute("DELETE FROM refresh_tokens WHERE token = ?", (token,))
-        self.conn.commit()
+    def delete_refresh_token(self, token: str) -> None:
+        with self._session() as session:
+            row = session.get(RefreshTokenORM, token)
+            if row:
+                session.delete(row)
+            session.commit()
 
-    def delete_all_refresh_tokens(self, user_id: int):
-        """DELETE FROM refresh_tokens WHERE user_id = ?"""
-        cur = self.conn.cursor()
-        cur.execute("DELETE FROM refresh_tokens WHERE user_id = ?", (user_id,))
-        self.conn.commit()
-
-    def _ensure_tables(self):
-        """Call once on startup. Add to your existing table-creation logic."""
-        cur = self.conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS refresh_tokens (
-                token      TEXT PRIMARY KEY,
-                user_id    INTEGER NOT NULL,
-                expires_at TEXT    NOT NULL
+    def delete_all_refresh_tokens(self, user_id: int) -> None:
+        with self._session() as session:
+            session.query(RefreshTokenORM).filter(RefreshTokenORM.user_id == user_id).delete(
+                synchronize_session=False
             )
-        """)
-        self.conn.commit()
+            session.commit()
+
+
+db = Database()

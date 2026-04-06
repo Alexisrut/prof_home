@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List, Optional
+from dataclasses import dataclass
+from typing import Optional
 
 
 @dataclass
@@ -22,14 +22,15 @@ class ContactInfo:
 
 @dataclass
 class User:
-    user_id: int               # PK, FK to ContactInfo.user_id
-    user_name: str             # ФИО (из ККР)
-    kkr_score: int             # Баллы ККР
-    group_number: str          # Номер группы
-    blocks: str                # Блоки
-    banned: bool               # БАН
-    super_user: bool           # Права SuperUser (председатель)
-    admin: bool                # Права Админа
+    user_id: int
+    user_name: str
+    hashed_password: str
+    kkr_score: int
+    group_number: str
+    blocks: str
+    banned: bool = False
+    super_user: bool = False
+    admin: bool = False
 
 
 @dataclass
@@ -39,33 +40,3 @@ class Guide:
     owner_block: str           # Блок "owner"
     text: str                  # Текст
     original_link: Optional[str] = None  # Ссылка на оригинал
-
-
-
-
-# ── Add to your existing User model / dataclass ───────────
-# If your User is a dataclass:
-
-from dataclasses import dataclass, field
-from typing import Optional
-from datetime import datetime
-
-@dataclass
-class User:
-    user_id: int
-    user_name: str
-    hashed_password: str          # ← NEW FIELD
-    kkr_score: int
-    group_number: str
-    blocks: str
-    banned: bool = False
-    super_user: bool = False
-    admin: bool = False
-
-
-# ── New tiny model for refresh tokens ─────────────────────
-@dataclass
-class RefreshToken:
-    token: str
-    user_id: int
-    expires_at: datetime

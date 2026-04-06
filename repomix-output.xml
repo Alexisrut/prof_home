@@ -1,0 +1,1116 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+database.py
+main.py
+models.py
+profcom.db
+README.md
+requirements.txt
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="models.py">
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import List, Optional
+
+
+@dataclass
+class ContactInfo:
+    user_id: int               # PK, also FK to User.user_id
+    fio: str                   # ФИО
+    kkr_name: str              # Имя ККР
+    group_number: str          # Номер группы
+    location: str              # Место проживания
+    blocks: str                # Блоки (можно хранить как строку с разделителем)
+    phone: str                 # Номер телефона
+    vk: str                    # ВК
+    tg: str                    # ТГ
+    email: str                 # Почта
+    budget: bool               # Бюджет (True) / платка (False)
+    in_profcom: bool           # Состоит ли в профкоме
+
+
+@dataclass
+class User:
+    user_id: int               # PK, FK to ContactInfo.user_id
+    user_name: str             # ФИО (из ККР)
+    kkr_score: int             # Баллы ККР
+    group_number: str          # Номер группы
+    blocks: str                # Блоки
+    banned: bool               # БАН
+    super_user: bool           # Права SuperUser (председатель)
+    admin: bool                # Права Админа
+
+
+@dataclass
+class Guide:
+    guide_id: int              # PK
+    title: str                 # Название гайда
+    owner_block: str           # Блок "owner"
+    text: str                  # Текст
+    original_link: Optional[str] = None  # Ссылка на оригинал
+</file>
+
+<file path="requirements.txt">
+fastapi==0.115.5
+uvicorn==0.32.0
+pydantic==2.9.2
+SQLAlchemy==2.0.36
+</file>
+
+<file path="database.py">
+from __future__ import annotations
+
+from typing import List, Optional
+
+from sqlalchemy import (
+    Boolean,
+    Column,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    create_engine,
+)
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker, Session
+
+from models import User as UserDC, ContactInfo as ContactInfoDC, Guide as GuideDC
+
+
+DATABASE_URL = "sqlite:///./profcom.db"
+
+engine = create_engine(DATABASE_URL, future=True)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+
+Base = declarative_base()
+
+
+class UserORM(Base):
+    __tablename__ = "users"
+
+    user_id = Column(Integer, primary_key=True, autoincrement=True)
+    user_name = Column(String, nullable=False)
+    kkr_score = Column(Integer, nullable=False)
+    group_number = Column(String, nullable=False)
+    blocks = Column(String, nullable=False)
+    banned = Column(Boolean, default=False, nullable=False)
+    super_user = Column(Boolean, default=False, nullable=False)
+    admin = Column(Boolean, default=False, nullable=False)
+
+    contact = relationship("ContactInfoORM", back_populates="user", uselist=False)
+
+
+class ContactInfoORM(Base):
+    __tablename__ = "contact_info"
+
+    user_id = Column(Integer, ForeignKey("users.user_id"), primary_key=True)
+    fio = Column(String, nullable=False)
+    kkr_name = Column(String, nullable=False)
+    group_number = Column(String, nullable=False)
+    location = Column(String, nullable=False)
+    blocks = Column(String, nullable=False)
+    phone = Column(String, nullable=False)
+    vk = Column(String, nullable=False)
+    tg = Column(String, nullable=False)
+    email = Column(String, nullable=False)
+    budget = Column(Boolean, nullable=False)
+    in_profcom = Column(Boolean, nullable=False)
+
+    user = relationship("UserORM", back_populates="contact")
+
+
+class GuideORM(Base):
+    __tablename__ = "guides"
+
+    guide_id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String, nullable=False)
+    owner_block = Column(String, nullable=False)
+    text = Column(Text, nullable=False)
+    original_link = Column(String, nullable=True)
+
+
+Base.metadata.create_all(bind=engine)
+
+
+def _user_orm_to_dc(u: UserORM) -> UserDC:
+    return UserDC(
+        user_id=u.user_id,
+        user_name=u.user_name,
+        kkr_score=u.kkr_score,
+        group_number=u.group_number,
+        blocks=u.blocks,
+        banned=u.banned,
+        super_user=u.super_user,
+        admin=u.admin,
+    )
+
+
+def _contact_orm_to_dc(c: ContactInfoORM) -> ContactInfoDC:
+    return ContactInfoDC(
+        user_id=c.user_id,
+        fio=c.fio,
+        kkr_name=c.kkr_name,
+        group_number=c.group_number,
+        location=c.location,
+        blocks=c.blocks,
+        phone=c.phone,
+        vk=c.vk,
+        tg=c.tg,
+        email=c.email,
+        budget=c.budget,
+        in_profcom=c.in_profcom,
+    )
+
+
+def _guide_orm_to_dc(g: GuideORM) -> GuideDC:
+    return GuideDC(
+        guide_id=g.guide_id,
+        title=g.title,
+        owner_block=g.owner_block,
+        text=g.text,
+        original_link=g.original_link,
+    )
+
+
+class DB:
+    """SQLAlchemy-backed database layer."""
+
+    def __init__(self) -> None:
+        self._SessionLocal = SessionLocal
+
+    def _session(self) -> Session:
+        return self._SessionLocal()
+
+    # --- Users & ContactInfo ---
+
+    def create_user_with_contact(
+        self,
+        contact: ContactInfoDC,
+        user: UserDC,
+    ) -> UserDC:
+        with self._session() as session:
+            u = UserORM(
+                user_name=user.user_name,
+                kkr_score=user.kkr_score,
+                group_number=user.group_number,
+                blocks=user.blocks,
+                banned=user.banned,
+                super_user=user.super_user,
+                admin=user.admin,
+            )
+            session.add(u)
+            session.flush()  # assign user_id
+
+            c = ContactInfoORM(
+                user_id=u.user_id,
+                fio=contact.fio,
+                kkr_name=contact.kkr_name,
+                group_number=contact.group_number,
+                location=contact.location,
+                blocks=contact.blocks,
+                phone=contact.phone,
+                vk=contact.vk,
+                tg=contact.tg,
+                email=contact.email,
+                budget=contact.budget,
+                in_profcom=contact.in_profcom,
+            )
+            session.add(c)
+            session.commit()
+            session.refresh(u)
+
+            return _user_orm_to_dc(u)
+
+    def get_user(self, user_id: int) -> Optional[UserDC]:
+        with self._session() as session:
+            u = session.get(UserORM, user_id)
+            if not u:
+                return None
+            return _user_orm_to_dc(u)
+
+    def get_user_by_name(self, user_name: str) -> Optional[UserDC]:
+        with self._session() as session:
+            u = (
+                session.query(UserORM)
+                .filter(UserORM.user_name == user_name)
+                .first()
+            )
+            if not u:
+                return None
+            return _user_orm_to_dc(u)
+
+    def delete_user(self, user_id: int) -> None:
+        with self._session() as session:
+            u = session.get(UserORM, user_id)
+            if u:
+                session.delete(u)
+            c = session.get(ContactInfoORM, user_id)
+            if c:
+                session.delete(c)
+            session.commit()
+
+    def update_user(self, user_id: int, **fields) -> Optional[UserDC]:
+        with self._session() as session:
+            u = session.get(UserORM, user_id)
+            if not u:
+                return None
+            for k, v in fields.items():
+                if v is None:
+                    continue
+                elif hasattr(u, k):
+                    setattr(u, k, v)
+            session.commit()
+            session.refresh(u)
+            return _user_orm_to_dc(u)
+
+    def update_contact(self, user_id: int, **fields) -> Optional[ContactInfoDC]:
+        with self._session() as session:
+            c = session.get(ContactInfoORM, user_id)
+            if not c:
+                return None
+            for k, v in fields.items():
+                if v is None:
+                    continue
+                if hasattr(c, k):
+                    setattr(c, k, v)
+            session.commit()
+            session.refresh(c)
+            return _contact_orm_to_dc(c)
+
+    def list_contacts(self) -> List[ContactInfoDC]:
+        with self._session() as session:
+            rows = session.query(ContactInfoORM).all()
+            return [_contact_orm_to_dc(c) for c in rows]
+
+    def filter_contacts(self, **criteria) -> List[ContactInfoDC]:
+        with self._session() as session:
+            q = session.query(ContactInfoORM)
+            if criteria.get("group_number") is not None:
+                q = q.filter(ContactInfoORM.group_number == criteria["group_number"])
+            if criteria.get("blocks") is not None:
+                q = q.filter(ContactInfoORM.blocks == criteria["blocks"])
+            if criteria.get("in_profcom") is not None:
+                q = q.filter(ContactInfoORM.in_profcom == criteria["in_profcom"])
+            if criteria.get("budget") is not None:
+                q = q.filter(ContactInfoORM.budget == criteria["budget"])
+            rows = q.all()
+            return [_contact_orm_to_dc(c) for c in rows]
+
+    # --- Guides ---
+
+    def list_guides(self) -> List[GuideDC]:
+        with self._session() as session:
+            rows = session.query(GuideORM).all()
+            return [_guide_orm_to_dc(g) for g in rows]
+
+    def create_guide(self, guide: GuideDC) -> GuideDC:
+        with self._session() as session:
+            g = GuideORM(
+                title=guide.title,
+                owner_block=guide.owner_block,
+                text=guide.text,
+                original_link=guide.original_link,
+            )
+            session.add(g)
+            session.commit()
+            session.refresh(g)
+            return _guide_orm_to_dc(g)
+
+    def update_guide(self, guide_id: int, **fields) -> Optional[GuideDC]:
+        with self._session() as session:
+            g = session.get(GuideORM, guide_id)
+            if not g:
+                return None
+            for k, v in fields.items():
+                if v is None:
+                    continue
+                if hasattr(g, k):
+                    setattr(g, k, v)
+            session.commit()
+            session.refresh(g)
+            return _guide_orm_to_dc(g)
+
+
+# global singleton for now
+db = DB()
+</file>
+
+<file path="main.py">
+from __future__ import annotations
+
+from typing import List, Optional
+
+from fastapi import FastAPI, HTTPException, Depends, Query
+from pydantic import BaseModel, EmailStr
+
+from database import db
+from models import ContactInfo, User, Guide
+
+
+app = FastAPI(title="Profcom backend")
+
+
+# --- Auth / permissions (simplified) ---
+
+class AuthUser(BaseModel):
+    user_id: int
+
+
+def get_current_user(auth_id: int = Query(..., alias="auth_id")) -> User:
+    """
+    Получаем текущего пользователя по query-параметру ?auth_id=...
+    """
+    user = db.get_user(auth_id)
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    return user
+
+
+def require_admin(cur: User = Depends(get_current_user)) -> User:
+    if not cur.admin and not cur.super_user:
+        raise HTTPException(status_code=403, detail="Admin rights required")
+    return cur
+
+
+def require_superuser(cur: User = Depends(get_current_user)) -> User:
+    if not cur.super_user:
+        raise HTTPException(status_code=403, detail="SuperUser rights required")
+    return cur
+
+
+# --- Schemas ---
+
+class ContactInfoIn(BaseModel):
+    fio: str
+    kkr_name: str
+    group_number: str
+    location: str
+    blocks: str
+    phone: str
+    vk: str
+    tg: str
+    email: EmailStr
+    budget: bool
+    in_profcom: bool
+
+
+class UserIn(BaseModel):
+    user_name: str
+    kkr_score: int
+    group_number: str
+    blocks: str
+    banned: bool = False
+    super_user: bool = False
+    admin: bool = False
+
+
+class UserOut(BaseModel):
+    user_id: int
+    user_name: str
+    kkr_score: int
+    group_number: str
+    blocks: str
+    banned: bool
+    super_user: bool
+    admin: bool
+
+
+class ContactInfoOut(ContactInfoIn):
+    user_id: int
+
+
+class GuideIn(BaseModel):
+    title: str
+    owner_block: str
+    text: str
+    original_link: Optional[str] = None
+
+
+class GuideOut(GuideIn):
+    guide_id: int
+
+
+# --- Registration / login ---
+
+@app.post("/register", response_model=UserOut)
+def register(contact: ContactInfoIn, user_in: UserIn):
+    """POST: registration – create contact_info + user."""
+    contact_model = ContactInfo(
+        user_id=0,
+        fio=contact.fio,
+        kkr_name=contact.kkr_name,
+        group_number=contact.group_number,
+        location=contact.location,
+        blocks=contact.blocks,
+        phone=contact.phone,
+        vk=contact.vk,
+        tg=contact.tg,
+        email=contact.email,
+        budget=contact.budget,
+        in_profcom=contact.in_profcom,
+    )
+    user_model = User(
+        user_id=0,
+        user_name=user_in.user_name,
+        kkr_score=user_in.kkr_score,
+        group_number=user_in.group_number,
+        blocks=user_in.blocks,
+        banned=user_in.banned,
+        super_user=user_in.super_user,
+        admin=user_in.admin,
+    )
+    created = db.create_user_with_contact(contact_model, user_model)
+    return UserOut(**created.__dict__)
+
+
+@app.get("/login", response_model=UserOut)
+def login(user_name: str):
+    """GET: login by name, returns user info."""
+    user = db.get_user_by_name(user_name)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserOut(**user.__dict__)
+
+
+# --- Profile page ---
+
+@app.get("/profile/{user_id}", response_model=UserOut)
+def get_profile(user_id: int):
+    user = db.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return UserOut(**user.__dict__)
+
+
+class ProfileUpdate(BaseModel):
+    # fields that can be updated in both user and contact_info
+    fio: Optional[str] = None
+    kkr_name: Optional[str] = None
+    group_number: Optional[str] = None
+    location: Optional[str] = None
+    blocks: Optional[str] = None
+    phone: Optional[str] = None
+    vk: Optional[str] = None
+    tg: Optional[str] = None
+    email: Optional[EmailStr] = None
+    budget: Optional[bool] = None
+    in_profcom: Optional[bool] = None
+
+
+@app.patch("/profile/{user_id}", response_model=UserOut)
+def update_profile(
+    user_id: int,
+    payload: ProfileUpdate,
+    cur: User = Depends(get_current_user),
+):
+    """
+    UPDATE contact_info/user – allowed for the user themself or any admin.
+    """
+    target = db.get_user(user_id)
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if cur.user_id != user_id and not (cur.admin or cur.super_user):
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    # update contact info
+    db.update_contact(
+        user_id,
+        fio=payload.fio,
+        kkr_name=payload.kkr_name,
+        group_number=payload.group_number,
+        location=payload.location,
+        blocks=payload.blocks,
+        phone=payload.phone,
+        vk=payload.vk,
+        tg=payload.tg,
+        email=payload.email,
+        budget=payload.budget,
+        in_profcom=payload.in_profcom,
+    )
+    # sync some fields to user entity
+    db.update_user(
+        user_id,
+        group_number=payload.group_number,
+        blocks=payload.blocks,
+    )
+    updated = db.get_user(user_id)
+    return UserOut(**updated.__dict__)
+
+
+@app.delete("/profile/{user_id}")
+def delete_user(
+    user_id: int,
+    cur: User = Depends(require_superuser),
+):
+    """DELETE user – only SuperUser."""
+    if not db.get_user(user_id):
+        raise HTTPException(status_code=404, detail="User not found")
+    db.delete_user(user_id)
+    return {"status": "deleted"}
+
+
+# --- Guides page ---
+
+@app.get("/guides", response_model=List[GuideOut])
+def list_guides():
+    guides = db.list_guides()
+    return [GuideOut(**g.__dict__) for g in guides]
+
+
+@app.post("/guides", response_model=GuideOut)
+def create_or_edit_guide(
+    guide: GuideIn,
+    cur: User = Depends(require_admin),
+):
+    g = Guide(
+        guide_id=0,
+        title=guide.title,
+        owner_block=guide.owner_block,
+        text=guide.text,
+        original_link=guide.original_link,
+    )
+    created = db.create_guide(g)
+    return GuideOut(**created.__dict__)
+
+
+# --- Contact info page ---
+
+@app.get("/contacts", response_model=List[ContactInfoOut])
+def get_all_contacts():
+    contacts = db.list_contacts()
+    return [ContactInfoOut(**c.__dict__) for c in contacts]
+
+
+class ContactFilter(BaseModel):
+    group_number: Optional[str] = None
+    blocks: Optional[str] = None
+    in_profcom: Optional[bool] = None
+    budget: Optional[bool] = None
+
+
+@app.post("/contacts/filter", response_model=List[ContactInfoOut])
+def filter_contacts(
+    filt: ContactFilter,
+    cur: User = Depends(require_admin),
+):
+    crit = {
+        "group_number": filt.group_number,
+        "blocks": filt.blocks,
+        "in_profcom": filt.in_profcom,
+        "budget": filt.budget,
+    }
+    contacts = db.filter_contacts(**crit)
+    return [ContactInfoOut(**c.__dict__) for c in contacts]
+</file>
+
+<file path="README.md">
+# prof_home
+## Описание проекта
+
+Backend для профкома на **FastAPI** с использованием **SQLite + SQLAlchemy**.  
+Поддерживает работу с пользователями, контактной информацией и гайдами, а также систему прав: **SuperUser**, **Admin**, **обычный пользователь**, **banned**.
+
+Структура пакета: всё находится в папке `prof_back` и запускается как Python‑пакет.
+
+## Установка и запуск
+
+### 1. Клонирование репозитория
+
+```bash
+git clone <URL_ТВОЕГО_РЕПОЗИТОРИЯ>.git
+cd <имя_папки_репозитория>
+```
+
+### 2. Виртуальное окружение и зависимости
+
+```bash
+python -m venv .venv
+source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r prof_back/requirements.txt
+```
+
+### 3. Запуск сервера
+
+```bash
+uvicorn main:app --reload
+```
+
+По умолчанию сервер поднимется на `http://127.0.0.1:8000`.
+
+База данных создаётся автоматически в файле `profcom.db` (SQLite) в корне проекта.
+
+---
+
+## Модель данных
+
+### Таблица `users`
+
+- `user_id` – PK
+- `user_name` – ФИО (из ККР)
+- `kkr_score` – баллы ККР
+- `group_number` – номер группы
+- `blocks` – блоки
+- `banned` – забанен ли
+- `super_user` – является ли председателем
+- `admin` – права админа
+
+### Таблица `contact_info`
+
+- `user_id` – PK, FK на `users.user_id`
+- `fio` – ФИО
+- `kkr_name` – имя ККР
+- `group_number` – номер группы
+- `location` – место проживания
+- `blocks` – блоки
+- `phone` – телефон
+- `vk` – ссылка/ID ВК
+- `tg` – ник в Telegram
+- `email` – почта
+- `budget` – бюджет (`true`) / платка (`false`)
+- `in_profcom` – состоит ли в профкоме
+
+### Таблица `guides`
+
+- `guide_id` – PK
+- `title` – название гайда
+- `owner_block` – блок‑владелец
+- `text` – текст гайда
+- `original_link` – ссылка на оригинал
+
+---
+
+## Авторизация / права
+
+Сейчас авторизация упрощена:  
+**кто делает запрос**, определяется query‑параметром `auth_id` (ID пользователя в БД).
+
+- Права SuperUser: `super_user == true`
+- Права Admin: `admin == true`
+- Для некоторых эндпоинтов достаточно быть Admin **или** SuperUser.
+
+Пример: `DELETE /profile/4?auth_id=5` – пользователь с `user_id=5` пытается удалить пользователя с `user_id=4`.
+
+---
+
+## Эндпоинты
+
+Ниже все основные ручки с входом/выходом.
+
+---
+
+### 1. Регистрация
+
+**POST `/register`**
+
+Создаёт запись в `contact_info` и `users`.
+
+**Тело запроса (JSON):**
+
+```json
+{
+  "contact": {
+    "fio": "Иван Петров",
+    "kkr_name": "IvanP",
+    "group_number": "КН-101",
+    "location": "корпус А",
+    "blocks": "КН",
+    "phone": "+79991234567",
+    "vk": "id123",
+    "tg": "@ivan",
+    "email": "ivan@example.com",
+    "budget": true,
+    "in_profcom": false
+  },
+  "user_in": {
+    "user_name": "Иван Петров",
+    "kkr_score": 0,
+    "group_number": "КН-101",
+    "blocks": "КН",
+    "banned": false,
+    "super_user": false,
+    "admin": false,
+    "mero_ids": []
+  }
+}
+```
+
+**Ответ (200, JSON, `UserOut`):**
+
+```json
+{
+  "user_id": 1,
+  "user_name": "Иван Петров",
+  "kkr_score": 0,
+  "group_number": "КН-101",
+  "blocks": "КН",
+  "banned": false,
+  "super_user": false,
+  "admin": false,
+  "mero_ids": []
+}
+```
+
+---
+
+### 2. Вход (логин)
+
+**GET `/login`**
+
+Поиск пользователя по `user_name`.
+
+**Query‑параметры:**
+
+- `user_name` – строка, обязательный.
+
+Пример запроса:
+
+```http
+GET /login?user_name=Иван%20Петров
+```
+
+**Ответ (200, JSON):**
+
+```json
+{
+  "user_id": 1,
+  "user_name": "Иван Петров",
+  "kkr_score": 0,
+  "group_number": "КН-101",
+  "blocks": "КН",
+  "banned": false,
+  "super_user": false,
+  "admin": false,
+  "mero_ids": []
+}
+```
+
+Ошибки:
+- 404 – если пользователь не найден.
+
+---
+
+### 3. Страница профиля – получить данные
+
+**GET `/profile/{user_id}`**
+
+Возвращает информацию о пользователе (из таблицы `users`).
+
+**Параметры пути:**
+
+- `user_id` – ID пользователя, чьи данные смотрим.
+
+Пример:
+
+```http
+GET /profile/1
+```
+
+**Ответ (200, JSON):**
+
+```json
+{
+  "user_id": 1,
+  "user_name": "Иван Петров",
+  "kkr_score": 0,
+  "group_number": "КН-101",
+  "blocks": "КН",
+  "banned": false,
+  "super_user": false,
+  "admin": false,
+  "mero_ids": []
+}
+```
+
+Ошибки:
+- 404 – если пользователь не найден.
+
+---
+
+### 4. Страница профиля – обновление данных
+
+**PATCH `/profile/{user_id}`**
+
+Обновляет данные профиля (и в `contact_info`, и часть полей в `users`).  
+Разрешено:
+
+- самому пользователю (`auth_id == user_id`),
+- любому Admin (`admin == true`),
+- SuperUser (`super_user == true`).
+
+**Параметры:**
+
+- Path: `user_id` – кого обновляем.
+- Query: `auth_id` – кто делает запрос.
+
+Пример:
+
+```http
+PATCH /profile/1?auth_id=1
+Content-Type: application/json
+```
+
+**Тело (любые поля опциональны):**
+
+```json
+{
+  "fio": "Иван Петрович",
+  "group_number": "КН-102",
+  "location": "корпус Б",
+  "blocks": "КН"
+}
+```
+
+**Ответ (200, JSON – обновлённый `UserOut`):**
+
+```json
+{
+  "user_id": 1,
+  "user_name": "Иван Петров",
+  "kkr_score": 0,
+  "group_number": "КН-102",
+  "blocks": "КН",
+  "banned": false,
+  "super_user": false,
+  "admin": false,
+  "mero_ids": []
+}
+```
+
+Ошибки:
+- 404 – пользователь не найден.
+- 403 – нет прав (ни сам, ни admin/super_user).
+
+---
+
+### 5. Удаление пользователя (SuperUser only)
+
+**DELETE `/profile/{user_id}`**
+
+Удаляет пользователя и его `contact_info`.  
+Только SuperUser.
+
+**Параметры:**
+
+- Path: `user_id` – кого удаляем.
+- Query: `auth_id` – кто делает запрос (должен быть SuperUser).
+
+Пример:
+
+```http
+DELETE /profile/4?auth_id=5
+```
+
+**Ответ (200, JSON):**
+
+```json
+{ "status": "deleted" }
+```
+
+Ошибки:
+- 404 – пользователь не найден.
+- 403 – `auth_id` не SuperUser.
+
+---
+
+### 6. Гайды – список
+
+**GET `/guides`**
+
+Возвращает список всех гайдов.
+
+**Пример запроса:**
+
+```http
+GET /guides
+```
+
+**Ответ (200, JSON, список `GuideOut`):**
+
+```json
+[
+  {
+    "guide_id": 1,
+    "title": "Как вступить в профком",
+    "owner_block": "КН",
+    "text": "Длинный текст гайда...",
+    "original_link": "https://example.com/guide1"
+  }
+]
+```
+
+---
+
+### 7. Гайды – создание / редактирование
+
+(Сейчас реализовано только **создание** – каждый POST создаёт новую запись.)
+
+**POST `/guides`**
+
+Доступно Admin и SuperUser.
+
+**Параметры:**
+
+- Query: `auth_id` – ID пользователя, который создаёт (должен иметь `admin == true` или `super_user == true`).
+
+**Тело запроса (JSON, `GuideIn`):**
+
+```json
+{
+  "title": "Как вступить в профком",
+  "owner_block": "КН",
+  "text": "Подробный гайд...",
+  "original_link": "https://example.com/guide1"
+}
+```
+
+**Ответ (200, JSON, `GuideOut`):**
+
+```json
+{
+  "guide_id": 1,
+  "title": "Как вступить в профком",
+  "owner_block": "КН",
+  "text": "Подробный гайд...",
+  "original_link": "https://example.com/guide1"
+}
+```
+
+Ошибки:
+- 403 – если `auth_id` не admin и не super_user.
+
+---
+
+### 8. Контактная информация – весь список
+
+**GET `/contacts`**
+
+Возвращает **всю** таблицу `contact_info`.
+
+**Пример:**
+
+```http
+GET /contacts
+```
+
+**Ответ (200, JSON, список `ContactInfoOut`):**
+
+```json
+[
+  {
+    "user_id": 1,
+    "fio": "Иван Петров",
+    "kkr_name": "IvanP",
+    "group_number": "КН-101",
+    "location": "корпус А",
+    "blocks": "КН",
+    "phone": "+79991234567",
+    "vk": "id123",
+    "tg": "@ivan",
+    "email": "ivan@example.com",
+    "budget": true,
+    "in_profcom": false
+  }
+]
+```
+
+---
+
+### 9. Контактная информация – фильтрация (для админа)
+
+**POST `/contacts/filter`**
+
+Доступно Admin и SuperUser.
+
+**Параметры:**
+
+- Query: `auth_id` – кто делает запрос (admin/super_user).
+
+**Тело (JSON, все поля опциональны):**
+
+```json
+{
+  "group_number": "КН-101",
+  "blocks": "КН",
+  "in_profcom": true,
+  "budget": true
+}
+```
+
+Фильтрация происходит по равенству полей (если поле передано в запросе).
+
+**Ответ (200, JSON, список `ContactInfoOut`):**
+
+```json
+[
+  {
+    "user_id": 2,
+    "fio": "Пётр Сидоров",
+    "kkr_name": "Petya",
+    "group_number": "КН-101",
+    "location": "корпус Б",
+    "blocks": "КН",
+    "phone": "+79990000000",
+    "vk": "id555",
+    "tg": "@petya",
+    "email": "petya@example.com",
+    "budget": true,
+    "in_profcom": true
+  }
+]
+```
+
+Ошибки:
+- 403 – если `auth_id` не admin и не super_user.
+
+---
+
+Если захочешь, можно в README дополнительно описать:
+- схему прав доступа (кто что видит/может править),
+- пример последовательности запросов (регистрация → логин → обновление профиля → фильтрация контактов).
+</file>
+
+</files>
