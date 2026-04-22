@@ -94,7 +94,7 @@ uvicorn main:app --reload
 
 ### 1. Регистрация
 
-**POST `/register`**
+**POST `/auth/register`**
 
 Создаёт запись в `contact_info` и `users`.
 
@@ -102,45 +102,23 @@ uvicorn main:app --reload
 
 ```json
 {
-  "contact": {
-    "fio": "Иван Петров",
-    "kkr_name": "IvanP",
-    "group_number": "КН-101",
-    "location": "корпус А",
-    "blocks": "КН",
-    "phone": "+79991234567",
-    "vk": "id123",
-    "tg": "@ivan",
-    "email": "ivan@example.com",
-    "budget": true,
-    "in_profcom": false
-  },
-  "user_in": {
-    "user_name": "Иван Петров",
-    "kkr_score": 0,
-    "group_number": "КН-101",
-    "blocks": "КН",
-    "banned": false,
-    "super_user": false,
-    "admin": false,
-    "mero_ids": []
-  }
+  "email": "ivan@example.com",
+  "user_name": "Иван Петров",
+  "password": "secret-password",
+  "group_number": 101,
+  "tg": "@ivan"
 }
 ```
 
-**Ответ (200, JSON, `UserOut`):**
+Примечание: поля `kkr_score`, `blocks`, `banned`, `super_user`, `admin` всё равно создаются в БД, но на регистрации выставляются сервером (дефолтами). Пользователь не может выдать себе права через регистрацию.
+
+**Ответ (201, JSON, токены):**
 
 ```json
 {
-  "user_id": 1,
-  "user_name": "Иван Петров",
-  "kkr_score": 0,
-  "group_number": "КН-101",
-  "blocks": "КН",
-  "banned": false,
-  "super_user": false,
-  "admin": false,
-  "mero_ids": []
+  "access_token": "...",
+  "refresh_token": "...",
+  "token_type": "bearer"
 }
 ```
 
@@ -148,38 +126,31 @@ uvicorn main:app --reload
 
 ### 2. Вход (логин)
 
-**GET `/login`**
+**POST `/auth/login`**
 
-Поиск пользователя по `user_name`.
-
-**Query‑параметры:**
-
-- `user_name` – строка, обязательный.
+Поиск пользователя по `email` (из `contact_info`) + проверка пароля.
 
 Пример запроса:
 
-```http
-GET /login?user_name=Иван%20Петров
+```json
+{
+  "email": "ivan@example.com",
+  "password": "secret-password"
+}
 ```
 
-**Ответ (200, JSON):**
+**Ответ (200, JSON, токены):**
 
 ```json
 {
-  "user_id": 1,
-  "user_name": "Иван Петров",
-  "kkr_score": 0,
-  "group_number": "КН-101",
-  "blocks": "КН",
-  "banned": false,
-  "super_user": false,
-  "admin": false,
-  "mero_ids": []
+  "access_token": "...",
+  "refresh_token": "...",
+  "token_type": "bearer"
 }
 ```
 
 Ошибки:
-- 404 – если пользователь не найден.
+- 401 – если пользователь не найден или пароль неверный.
 
 ---
 
@@ -187,7 +158,7 @@ GET /login?user_name=Иван%20Петров
 
 **GET `/profile/{user_id}`**
 
-Возвращает информацию о пользователе (из таблицы `users`).
+Возвращает информацию о пользователе (из таблицы `users`) + `email` и `tg` (из `contact_info`).
 
 **Параметры пути:**
 
@@ -217,6 +188,14 @@ GET /profile/1
 
 Ошибки:
 - 404 – если пользователь не найден.
+
+---
+
+### 3.1. Профиль текущего пользователя (me)
+
+**GET `/profile/me`**
+
+Требует Bearer access token. Возвращает профиль пользователя **вместе с `email` и `tg`** (из `contact_info`).
 
 ---
 

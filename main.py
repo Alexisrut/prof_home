@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel, EmailStr
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr, Field
 
 from database import db
 from models import ContactInfo, User, Guide
@@ -22,7 +23,23 @@ from auth import (
 )
 
 
-app = FastAPI(title="Profcom backend")
+app = FastAPI(
+    title="Profcom backend",
+    )
+
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -34,39 +51,47 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════
 
 class ContactInfoIn(BaseModel):
-    fio: str
-    kkr_name: str
-    group_number: str
-    location: str
-    blocks: str
-    phone: str
-    vk: str
-    tg: str
     email: EmailStr
-    budget: bool
-    in_profcom: bool
+    fio: str = ""
+    kkr_name: str = ""
+    group_number: str = ""
+    location: str = ""
+    blocks: str = ""
+    phone: str = ""
+    vk: str = ""
+    tg: str = ""
+    budget: bool = False
+    in_profcom: bool = False
 
 
-class UserIn(BaseModel):
+class RegisterIn(BaseModel):
+    email: EmailStr
     user_name: str
     password: str                    # ← NEW: plain-text password from client
-    kkr_score: int
-    group_number: str
-    blocks: str
-    banned: bool = False
-    super_user: bool = False
-    admin: bool = False
+    group_number: int = Field(..., ge=1)
+    tg: str = Field(
+        ...,
+        min_length=5,
+        max_length=33,  # with optional leading "@"
+        pattern=r"^@?[A-Za-z0-9_]{5,32}$",
+    )
+    # NOTE: other user fields are set server-side with defaults on registration
 
 
 class UserOut(BaseModel):
     user_id: int
     user_name: str
     kkr_score: int
-    group_number: str
+    group_number: int
     blocks: str
     banned: bool
     super_user: bool
     admin: bool
+
+
+class ProfileOut(UserOut):
+    email: EmailStr
+    tg: str
 
 
 class ContactInfoOut(ContactInfoIn):
@@ -95,7 +120,7 @@ class RefreshRequest(BaseModel):
 
 
 class LoginIn(BaseModel):
-    user_name: str
+    email: EmailStr
     password: str
 
 
@@ -125,45 +150,46 @@ class ContactFilter(BaseModel):
 # ═══════════════════════════════════════════════════════════
 
 @app.post("/auth/register", response_model=TokenPair, status_code=201)
-def register(contact: ContactInfoIn, user_in: UserIn):
+def register(payload: RegisterIn):
     """
     Register a new user.
     Body JSON:
     {
-      "contact": { ... },
-      "user_in": { "user_name": "...", "password": "...", ... }
+      "email": "...",
+      "user_name": "...",
+      "password": "..."
     }
     Returns access + refresh tokens immediately.
     """
-    logger.info(f"Arguments: {user_in.model_dump_json()}")
+    logger.info(f"Arguments: {payload.model_dump_json()}")
     # Check duplicate
-    if db.get_user_by_name(user_name=user_in.user_name):
+    if db.get_user_by_name(user_name=payload.user_name):
         raise HTTPException(409, "User name already taken")
 
     contact_model = ContactInfo(
         user_id=0,
-        fio=contact.fio,
-        kkr_name=contact.kkr_name,
-        group_number=contact.group_number,
-        location=contact.location,
-        blocks=contact.blocks,
-        phone=contact.phone,
-        vk=contact.vk,
-        tg=contact.tg,
-        email=contact.email,
-        budget=contact.budget,
-        in_profcom=contact.in_profcom,
+        fio="",
+        kkr_name="",
+        group_number=str(payload.group_number),
+        location="",
+        blocks="",
+        phone="",
+        vk="",
+        tg=payload.tg,
+        email=str(payload.email),
+        budget=False,
+        in_profcom=False,
     )
     user_model = User(
         user_id=0,
-        user_name=user_in.user_name,
-        hashed_password=hash_password(user_in.password),   # ← hash!
-        kkr_score=user_in.kkr_score,
-        group_number=user_in.group_number,
-        blocks=user_in.blocks,
-        banned=user_in.banned,
-        super_user=user_in.super_user,
-        admin=user_in.admin,
+        user_name=payload.user_name,
+        hashed_password=hash_password(payload.password),   # ← hash!
+        kkr_score=0,
+        group_number=str(payload.group_number),
+        blocks="",
+        banned=False,
+        super_user=False,
+        admin=False,
     )
     created = db.create_user_with_contact(contact_model, user_model)
 
@@ -174,9 +200,9 @@ def register(contact: ContactInfoIn, user_in: UserIn):
 @app.post("/auth/login", response_model=TokenPair)
 def login(body: LoginIn):
     """
-    Authenticate with user_name + password → get tokens.
+    Authenticate with email + password → get tokens.
     """
-    user = db.get_user_by_name(body.user_name)
+    user = db.get_user_by_email(str(body.email))
     if not user:
         raise HTTPException(401, "Invalid credentials")
 
@@ -219,18 +245,24 @@ def logout_all(cur: User = Depends(get_current_user)):
 #  PROFILE   (protected by Bearer token now)
 # ═══════════════════════════════════════════════════════════
 
-@app.get("/profile/me", response_model=UserOut)
+@app.get("/profile/me", response_model=ProfileOut)
 def my_profile(cur: User = Depends(get_current_user)):
     """Return the profile of the currently authenticated user."""
-    return UserOut(**cur.__dict__)
+    contact = db.get_contact(cur.user_id)
+    if not contact:
+        raise HTTPException(500, "Contact info missing for user")
+    return ProfileOut(**cur.__dict__, email=contact.email, tg=contact.tg)
 
 
-@app.get("/profile/{user_id}", response_model=UserOut)
+@app.get("/profile/{user_id}", response_model=ProfileOut)
 def get_profile(user_id: int):
     user = db.get_user(user_id)
     if not user:
         raise HTTPException(404, "User not found")
-    return UserOut(**user.__dict__)
+    contact = db.get_contact(user_id)
+    if not contact:
+        raise HTTPException(500, "Contact info missing for user")
+    return ProfileOut(**user.__dict__, email=contact.email, tg=contact.tg)
 
 
 @app.patch("/profile/{user_id}", response_model=UserOut)

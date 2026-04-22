@@ -196,6 +196,25 @@ class Database:
                 return None
             return _user_orm_to_dc(u)
 
+    def get_user_by_email(self, email: str) -> Optional[UserDC]:
+        with self._session() as session:
+            u = (
+                session.query(UserORM)
+                .join(ContactInfoORM, ContactInfoORM.user_id == UserORM.user_id)
+                .filter(ContactInfoORM.email == email)
+                .first()
+            )
+            if not u:
+                return None
+            return _user_orm_to_dc(u)
+
+    def get_contact(self, user_id: int) -> Optional[ContactInfoDC]:
+        with self._session() as session:
+            c = session.get(ContactInfoORM, user_id)
+            if not c:
+                return None
+            return _contact_orm_to_dc(c)
+
     def delete_user(self, user_id: int) -> None:
         with self._session() as session:
             session.query(RefreshTokenORM).filter(RefreshTokenORM.user_id == user_id).delete(
