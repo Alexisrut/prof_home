@@ -68,6 +68,7 @@ class BlockORM(Base):
 
     name = Column(String, primary_key=True)
     master = Column(String, nullable=False)
+    hr = Column(String, nullable=False, default="")
     cnt_of_human = Column(Integer, nullable=False, default=0)
     arr_of_human = Column(Text, nullable=False, default="[]")
 
@@ -95,6 +96,22 @@ def _ensure_sqlite_users_password_column() -> None:
 
 
 _ensure_sqlite_users_password_column()
+
+
+def _ensure_sqlite_block_hr_column() -> None:
+    """Add hr column to existing block table in SQLite DBs."""
+    with engine.begin() as conn:
+        rows = conn.execute(text("PRAGMA table_info(block)")).fetchall()
+        if not rows:
+            return
+        col_names = {r[1] for r in rows}
+        if "hr" not in col_names:
+            conn.execute(
+                text("ALTER TABLE block ADD COLUMN hr VARCHAR NOT NULL DEFAULT ''")
+            )
+
+
+_ensure_sqlite_block_hr_column()
 
 
 def _user_orm_to_dc(u: UserORM) -> UserDC:
@@ -146,6 +163,7 @@ def _block_orm_to_dc(b: BlockORM) -> BlockDC:
     return BlockDC(
         name=b.name,
         master=b.master,
+        hr=b.hr,
         cnt_of_human=b.cnt_of_human,
         arr_of_human=arr,
     )
@@ -338,6 +356,7 @@ class Database:
             b = BlockORM(
                 name=block.name,
                 master=block.master,
+                hr=block.hr,
                 cnt_of_human=block.cnt_of_human,
                 arr_of_human=json.dumps(block.arr_of_human),
             )
@@ -361,6 +380,8 @@ class Database:
 
             if fields.get("master") is not None:
                 b.master = fields["master"]
+            if fields.get("hr") is not None:
+                b.hr = fields["hr"]
             if fields.get("cnt_of_human") is not None:
                 b.cnt_of_human = fields["cnt_of_human"]
             if fields.get("arr_of_human") is not None:

@@ -46,5 +46,6 @@ class Guide:
 class Block:
     name: str
     master: str
+    hr: str = ""
     cnt_of_human: int = 0
     arr_of_human: list[int] = field(default_factory=list)

@@ -112,12 +112,14 @@ class GuideOut(GuideIn):
 class BlockIn(BaseModel):
     name: str
     master: str
+    hr: str = ""
     cnt_of_human: int = 0
     arr_of_human: list[int] = Field(default_factory=list)
 
 
 class BlockUpdate(BaseModel):
     master: Optional[str] = None
+    hr: Optional[str] = None
     cnt_of_human: Optional[int] = None
     arr_of_human: Optional[list[int]] = None
 
@@ -350,6 +352,7 @@ def create_block(payload: BlockIn, cur: User = Depends(require_superuser)):
     block = Block(
         name=payload.name,
         master=payload.master,
+        hr=payload.hr,
         cnt_of_human=payload.cnt_of_human,
         arr_of_human=payload.arr_of_human,
     )
@@ -366,6 +369,7 @@ def update_block(
     updated = db.update_block(
         block_name,
         master=payload.master,
+        hr=payload.hr,
         cnt_of_human=payload.cnt_of_human,
         arr_of_human=payload.arr_of_human,
     )
