@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
 from database import db
-from models import ContactInfo, User, Guide
+from models import Block, ContactInfo, User, Guide
 import logging
 # ── Import the NEW auth module instead of inline helpers ───
 from auth import (
@@ -107,6 +107,23 @@ class GuideIn(BaseModel):
 
 class GuideOut(GuideIn):
     guide_id: int
+
+
+class BlockIn(BaseModel):
+    name: str
+    master: str
+    cnt_of_human: int = 0
+    arr_of_human: list[int] = Field(default_factory=list)
+
+
+class BlockUpdate(BaseModel):
+    master: Optional[str] = None
+    cnt_of_human: Optional[int] = None
+    arr_of_human: Optional[list[int]] = None
+
+
+class BlockOut(BlockIn):
+    pass
 
 
 class TokenPair(BaseModel):
@@ -314,6 +331,71 @@ def create_guide(guide: GuideIn, cur: User = Depends(require_admin)):
               text=guide.text, original_link=guide.original_link)
     created = db.create_guide(g)
     return GuideOut(**created.__dict__)
+
+
+# ═══════════════════════════════════════════════════════════
+#  BLOCKS
+# ═══════════════════════════════════════════════════════════
+
+@app.get("/blocks", response_model=List[BlockOut])
+def list_blocks():
+    return [BlockOut(**b.__dict__) for b in db.list_blocks()]
+
+
+@app.post("/blocks", response_model=BlockOut)
+def create_block(payload: BlockIn, cur: User = Depends(require_superuser)):
+    existing = db.get_block(payload.name)
+    if existing:
+        raise HTTPException(409, "Block already exists")
+    block = Block(
+        name=payload.name,
+        master=payload.master,
+        cnt_of_human=payload.cnt_of_human,
+        arr_of_human=payload.arr_of_human,
+    )
+    created = db.create_block(block)
+    return BlockOut(**created.__dict__)
+
+
+@app.patch("/blocks/{block_name}", response_model=BlockOut)
+def update_block(
+    block_name: str,
+    payload: BlockUpdate,
+    cur: User = Depends(require_superuser),
+):
+    updated = db.update_block(
+        block_name,
+        master=payload.master,
+        cnt_of_human=payload.cnt_of_human,
+        arr_of_human=payload.arr_of_human,
+    )
+    if not updated:
+        raise HTTPException(404, "Block not found")
+    return BlockOut(**updated.__dict__)
+
+
+@app.delete("/blocks/{block_name}")
+def delete_block(block_name: str, cur: User = Depends(require_superuser)):
+    if not db.get_block(block_name):
+        raise HTTPException(404, "Block not found")
+    db.delete_block(block_name)
+    return {"status": "deleted"}
+
+
+@app.post("/blocks/{block_name}/enter", response_model=BlockOut)
+def enter_block(block_name: str, cur: User = Depends(get_current_user)):
+    updated = db.enter_user_to_block(cur.user_id, block_name)
+    if not updated:
+        raise HTTPException(404, "User or block not found")
+    return BlockOut(**updated.__dict__)
+
+
+@app.post("/blocks/{block_name}/exit", response_model=BlockOut)
+def exit_block(block_name: str, cur: User = Depends(get_current_user)):
+    updated = db.exit_user_from_block(cur.user_id, block_name)
+    if not updated:
+        raise HTTPException(404, "User or block not found")
+    return BlockOut(**updated.__dict__)
 
 
 # ═══════════════════════════════════════════════════════════

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 
@@ -40,3 +40,11 @@ class Guide:
     owner_block: str           # Блок "owner"
     text: str                  # Текст
     original_link: Optional[str] = None  # Ссылка на оригинал
+
+
+@dataclass
+class Block:
+    name: str
+    master: str
+    cnt_of_human: int = 0
+    arr_of_human: list[int] = field(default_factory=list)

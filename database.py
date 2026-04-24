@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text, create_engine, text
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
-from models import ContactInfo as ContactInfoDC, Guide as GuideDC, User as UserDC
+from models import Block as BlockDC, ContactInfo as ContactInfoDC, Guide as GuideDC, User as UserDC
 
 
 DATABASE_URL = "sqlite:///./profcom.db"
@@ -60,6 +61,15 @@ class GuideORM(Base):
     owner_block = Column(String, nullable=False)
     text = Column(Text, nullable=False)
     original_link = Column(String, nullable=True)
+
+
+class BlockORM(Base):
+    __tablename__ = "block"
+
+    name = Column(String, primary_key=True)
+    master = Column(String, nullable=False)
+    cnt_of_human = Column(Integer, nullable=False, default=0)
+    arr_of_human = Column(Text, nullable=False, default="[]")
 
 
 class RefreshTokenORM(Base):
@@ -126,6 +136,27 @@ def _guide_orm_to_dc(g: GuideORM) -> GuideDC:
         text=g.text,
         original_link=g.original_link,
     )
+
+
+def _block_orm_to_dc(b: BlockORM) -> BlockDC:
+    try:
+        arr = json.loads(b.arr_of_human) if b.arr_of_human else []
+    except json.JSONDecodeError:
+        arr = []
+    return BlockDC(
+        name=b.name,
+        master=b.master,
+        cnt_of_human=b.cnt_of_human,
+        arr_of_human=arr,
+    )
+
+
+def _parse_blocks(raw: str) -> list[str]:
+    return [part.strip() for part in raw.split(",") if part.strip()]
+
+
+def _format_blocks(items: list[str]) -> str:
+    return ",".join(items)
 
 
 class Database:
@@ -294,6 +325,117 @@ class Database:
             session.commit()
             session.refresh(g)
             return _guide_orm_to_dc(g)
+
+    # --- Blocks ---
+
+    def list_blocks(self) -> List[BlockDC]:
+        with self._session() as session:
+            rows = session.query(BlockORM).all()
+            return [_block_orm_to_dc(b) for b in rows]
+
+    def create_block(self, block: BlockDC) -> BlockDC:
+        with self._session() as session:
+            b = BlockORM(
+                name=block.name,
+                master=block.master,
+                cnt_of_human=block.cnt_of_human,
+                arr_of_human=json.dumps(block.arr_of_human),
+            )
+            session.add(b)
+            session.commit()
+            session.refresh(b)
+            return _block_orm_to_dc(b)
+
+    def get_block(self, name: str) -> Optional[BlockDC]:
+        with self._session() as session:
+            b = session.get(BlockORM, name)
+            if not b:
+                return None
+            return _block_orm_to_dc(b)
+
+    def update_block(self, name: str, **fields) -> Optional[BlockDC]:
+        with self._session() as session:
+            b = session.get(BlockORM, name)
+            if not b:
+                return None
+
+            if fields.get("master") is not None:
+                b.master = fields["master"]
+            if fields.get("cnt_of_human") is not None:
+                b.cnt_of_human = fields["cnt_of_human"]
+            if fields.get("arr_of_human") is not None:
+                b.arr_of_human = json.dumps(fields["arr_of_human"])
+
+            session.commit()
+            session.refresh(b)
+            return _block_orm_to_dc(b)
+
+    def delete_block(self, name: str) -> None:
+        with self._session() as session:
+            b = session.get(BlockORM, name)
+            if b:
+                session.delete(b)
+            session.commit()
+
+    def enter_user_to_block(self, user_id: int, block_name: str) -> Optional[BlockDC]:
+        with self._session() as session:
+            u = session.get(UserORM, user_id)
+            c = session.get(ContactInfoORM, user_id)
+            b = session.get(BlockORM, block_name)
+            if not u or not c or not b:
+                return None
+
+            try:
+                user_ids = json.loads(b.arr_of_human) if b.arr_of_human else []
+            except json.JSONDecodeError:
+                user_ids = []
+
+            if user_id not in user_ids:
+                user_ids.append(user_id)
+
+            b.arr_of_human = json.dumps(user_ids)
+            b.cnt_of_human = len(user_ids)
+
+            user_blocks = _parse_blocks(u.blocks)
+            if block_name not in user_blocks:
+                user_blocks.append(block_name)
+                u.blocks = _format_blocks(user_blocks)
+
+            contact_blocks = _parse_blocks(c.blocks)
+            if block_name not in contact_blocks:
+                contact_blocks.append(block_name)
+                c.blocks = _format_blocks(contact_blocks)
+
+            session.commit()
+            session.refresh(b)
+            return _block_orm_to_dc(b)
+
+    def exit_user_from_block(self, user_id: int, block_name: str) -> Optional[BlockDC]:
+        with self._session() as session:
+            u = session.get(UserORM, user_id)
+            c = session.get(ContactInfoORM, user_id)
+            b = session.get(BlockORM, block_name)
+            if not u or not c or not b:
+                return None
+
+            try:
+                user_ids = json.loads(b.arr_of_human) if b.arr_of_human else []
+            except json.JSONDecodeError:
+                user_ids = []
+
+            user_ids = [uid for uid in user_ids if uid != user_id]
+            b.arr_of_human = json.dumps(user_ids)
+            b.cnt_of_human = len(user_ids)
+
+            user_blocks = [name for name in _parse_blocks(u.blocks) if name != block_name]
+            u.blocks = _format_blocks(user_blocks)
+
+            contact_blocks = [name for name in _parse_blocks(c.blocks) if name != block_name]
+            c.blocks = _format_blocks(contact_blocks)
+
+            session.commit()
+            session.refresh(b)
+            return _block_orm_to_dc(b)
 
     def update_guide(self, guide_id: int, **fields) -> Optional[GuideDC]:
         with self._session() as session:
