@@ -38,7 +38,9 @@ class ContactInfoORM(Base):
     __tablename__ = "contact_info"
 
     user_id = Column(Integer, ForeignKey("users.user_id"), primary_key=True)
-    fio = Column(String, nullable=False)
+    surname = Column(String, nullable=False, default="")
+    name = Column(String, nullable=False, default="")
+    patronymic = Column(String, nullable=False, default="")
     kkr_name = Column(String, nullable=False)
     group_number = Column(String, nullable=False)
     location = Column(String, nullable=False)
@@ -46,7 +48,7 @@ class ContactInfoORM(Base):
     phone = Column(String, nullable=False)
     vk = Column(String, nullable=False)
     tg = Column(String, nullable=False)
-    email = Column(String, nullable=False)
+    email = Column(String, nullable=False, unique=True, index=True)
     budget = Column(Boolean, nullable=False)
     in_profcom = Column(Boolean, nullable=False)
 
@@ -114,6 +116,138 @@ def _ensure_sqlite_block_hr_column() -> None:
 _ensure_sqlite_block_hr_column()
 
 
+def _split_fio(raw: str) -> tuple[str, str, str]:
+    parts = [p for p in (raw or "").strip().split() if p]
+    if len(parts) >= 3:
+        return parts[0], parts[1], " ".join(parts[2:])
+    if len(parts) == 2:
+        return parts[0], parts[1], ""
+    if len(parts) == 1:
+        return "", parts[0], ""
+    return "", "", ""
+
+
+def _migrate_sqlite_contact_info_fio_to_components() -> None:
+    """
+    Migrate legacy `contact_info` schema:
+      fio TEXT NOT NULL
+    to:
+      surname TEXT NOT NULL DEFAULT ''
+      name TEXT NOT NULL DEFAULT ''
+      patronymic TEXT NOT NULL DEFAULT ''
+
+    SQLite can't drop/alter columns reliably; we recreate the table.
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text("PRAGMA table_info(contact_info)")).fetchall()
+        if not rows:
+            return
+        col_names = {r[1] for r in rows}
+        if "fio" not in col_names:
+            return
+        if {"surname", "name", "patronymic"}.issubset(col_names):
+            return
+
+        conn.execute(text("PRAGMA foreign_keys=OFF"))
+
+        conn.execute(
+            text(
+                """
+                CREATE TABLE IF NOT EXISTS contact_info__new (
+                  user_id INTEGER PRIMARY KEY,
+                  surname VARCHAR NOT NULL DEFAULT '',
+                  name VARCHAR NOT NULL DEFAULT '',
+                  patronymic VARCHAR NOT NULL DEFAULT '',
+                  kkr_name VARCHAR NOT NULL,
+                  group_number VARCHAR NOT NULL,
+                  location VARCHAR NOT NULL,
+                  blocks VARCHAR NOT NULL,
+                  phone VARCHAR NOT NULL,
+                  vk VARCHAR NOT NULL,
+                  tg VARCHAR NOT NULL,
+                  email VARCHAR NOT NULL,
+                  budget BOOLEAN NOT NULL,
+                  in_profcom BOOLEAN NOT NULL,
+                  FOREIGN KEY(user_id) REFERENCES users(user_id)
+                )
+                """
+            )
+        )
+
+        old_rows = conn.execute(
+            text(
+                """
+                SELECT
+                  user_id, fio, kkr_name, group_number, location, blocks,
+                  phone, vk, tg, email, budget, in_profcom
+                FROM contact_info
+                """
+            )
+        ).fetchall()
+
+        for r in old_rows:
+            surname, name, patronymic = _split_fio(r[1])
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO contact_info__new (
+                      user_id, surname, name, patronymic, kkr_name, group_number,
+                      location, blocks, phone, vk, tg, email, budget, in_profcom
+                    ) VALUES (
+                      :user_id, :surname, :name, :patronymic, :kkr_name, :group_number,
+                      :location, :blocks, :phone, :vk, :tg, :email, :budget, :in_profcom
+                    )
+                    """
+                ),
+                {
+                    "user_id": r[0],
+                    "surname": surname,
+                    "name": name,
+                    "patronymic": patronymic,
+                    "kkr_name": r[2],
+                    "group_number": r[3],
+                    "location": r[4],
+                    "blocks": r[5],
+                    "phone": r[6],
+                    "vk": r[7],
+                    "tg": r[8],
+                    "email": r[9],
+                    "budget": r[10],
+                    "in_profcom": r[11],
+                },
+            )
+
+        conn.execute(text("DROP TABLE contact_info"))
+        conn.execute(text("ALTER TABLE contact_info__new RENAME TO contact_info"))
+
+        conn.execute(text("PRAGMA foreign_keys=ON"))
+
+
+_migrate_sqlite_contact_info_fio_to_components()
+
+
+def _ensure_sqlite_unique_contact_email() -> None:
+    """
+    Ensure email is unique in `contact_info`.
+    For existing SQLite DBs we add a UNIQUE index (schema-alter friendly).
+    """
+    with engine.begin() as conn:
+        rows = conn.execute(text("PRAGMA table_info(contact_info)")).fetchall()
+        if not rows:
+            return
+        col_names = {r[1] for r in rows}
+        if "email" not in col_names:
+            return
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_contact_info_email ON contact_info(email)"
+            )
+        )
+
+
+_ensure_sqlite_unique_contact_email()
+
+
 def _user_orm_to_dc(u: UserORM) -> UserDC:
     return UserDC(
         user_id=u.user_id,
@@ -131,7 +265,9 @@ def _user_orm_to_dc(u: UserORM) -> UserDC:
 def _contact_orm_to_dc(c: ContactInfoORM) -> ContactInfoDC:
     return ContactInfoDC(
         user_id=c.user_id,
-        fio=c.fio,
+        surname=c.surname,
+        name=c.name,
+        patronymic=c.patronymic,
         kkr_name=c.kkr_name,
         group_number=c.group_number,
         location=c.location,
@@ -209,7 +345,9 @@ class Database:
 
             c = ContactInfoORM(
                 user_id=u.user_id,
-                fio=contact.fio,
+                surname=contact.surname,
+                name=contact.name,
+                patronymic=contact.patronymic,
                 kkr_name=contact.kkr_name,
                 group_number=contact.group_number,
                 location=contact.location,

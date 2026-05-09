@@ -40,7 +40,7 @@ uvicorn main:app --reload
 ### Таблица `users`
 
 - `user_id` – PK
-- `user_name` – ФИО (из ККР)
+- `user_name` – отображаемое имя (из ККР)
 - `kkr_score` – баллы ККР
 - `group_number` – номер группы
 - `blocks` – блоки
@@ -51,7 +51,9 @@ uvicorn main:app --reload
 ### Таблица `contact_info`
 
 - `user_id` – PK, FK на `users.user_id`
-- `fio` – ФИО
+- `surname` – фамилия
+- `name` – имя
+- `patronymic` – отчество
 - `kkr_name` – имя ККР
 - `group_number` – номер группы
 - `location` – место проживания
@@ -103,7 +105,9 @@ uvicorn main:app --reload
 ```json
 {
   "email": "ivan@example.com",
-  "user_name": "Иван Петров",
+  "surname": "Петров",
+  "name": "Иван",
+  "patronymic": "Петрович",
   "password": "secret-password",
   "group_number": 101,
   "tg": "@ivan"
@@ -226,7 +230,9 @@ Content-Type: application/json
 
 ```json
 {
-  "fio": "Иван Петрович",
+  "surname": "Петров",
+  "name": "Иван",
+  "patronymic": "Петрович",
   "group_number": "КН-102",
   "location": "корпус Б",
   "blocks": "КН"
@@ -371,7 +377,9 @@ GET /contacts
 [
   {
     "user_id": 1,
-    "fio": "Иван Петров",
+    "surname": "Петров",
+    "name": "Иван",
+    "patronymic": "",
     "kkr_name": "IvanP",
     "group_number": "КН-101",
     "location": "корпус А",
@@ -417,7 +425,9 @@ GET /contacts
 [
   {
     "user_id": 2,
-    "fio": "Пётр Сидоров",
+    "surname": "Сидоров",
+    "name": "Пётр",
+    "patronymic": "",
     "kkr_name": "Petya",
     "group_number": "КН-101",
     "location": "корпус Б",

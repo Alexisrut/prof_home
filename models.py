@@ -8,7 +8,9 @@ from typing import Optional
 class ContactInfo:
     user_id: int               # PK, also FK to User.user_id
     email: str                 # Почта
-    fio: str = ""              # ФИО
+    surname: str = ""          # Фамилия
+    name: str = ""             # Имя
+    patronymic: str = ""       # Отчество
     kkr_name: str = ""         # Имя ККР
     group_number: str = ""     # Номер группы
     location: str = ""         # Место проживания

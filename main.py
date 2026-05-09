@@ -52,7 +52,9 @@ logger = logging.getLogger(__name__)
 
 class ContactInfoIn(BaseModel):
     email: EmailStr
-    fio: str = ""
+    surname: str = ""
+    name: str = ""
+    patronymic: str = ""
     kkr_name: str = ""
     group_number: str = ""
     location: str = ""
@@ -66,7 +68,9 @@ class ContactInfoIn(BaseModel):
 
 class RegisterIn(BaseModel):
     email: EmailStr
-    user_name: str
+    surname: str = ""
+    name: str = ""
+    patronymic: str = ""
     password: str                    # ← NEW: plain-text password from client
     group_number: int = Field(..., ge=1)
     tg: str = Field(
@@ -144,7 +148,9 @@ class LoginIn(BaseModel):
 
 
 class ProfileUpdate(BaseModel):
-    fio: Optional[str] = None
+    surname: Optional[str] = None
+    name: Optional[str] = None
+    patronymic: Optional[str] = None
     kkr_name: Optional[str] = None
     group_number: Optional[str] = None
     location: Optional[str] = None
@@ -175,19 +181,31 @@ def register(payload: RegisterIn):
     Body JSON:
     {
       "email": "...",
-      "user_name": "...",
+      "surname": "...",
+      "name": "...",
+      "patronymic": "...",
       "password": "..."
     }
     Returns access + refresh tokens immediately.
     """
     logger.info(f"Arguments: {payload.model_dump_json()}")
-    # Check duplicate
-    if db.get_user_by_name(user_name=payload.user_name):
-        raise HTTPException(409, "User name already taken")
+    # Uniqueness: email
+    if db.get_user_by_email(str(payload.email)):
+        raise HTTPException(409, "Email already registered")
+
+    user_name = " ".join(
+        part.strip()
+        for part in [payload.surname, payload.name, payload.patronymic]
+        if part and part.strip()
+    ).strip()
+    if not user_name:
+        user_name = str(payload.email)
 
     contact_model = ContactInfo(
         user_id=0,
-        fio="",
+        surname=payload.surname,
+        name=payload.name,
+        patronymic=payload.patronymic,
         kkr_name="",
         group_number=str(payload.group_number),
         location="",
@@ -201,7 +219,7 @@ def register(payload: RegisterIn):
     )
     user_model = User(
         user_id=0,
-        user_name=payload.user_name,
+        user_name=user_name,
         hashed_password=hash_password(payload.password),   # ← hash!
         kkr_score=0,
         group_number=str(payload.group_number),
@@ -298,7 +316,8 @@ def update_profile(
 
     db.update_contact(
         user_id,
-        fio=payload.fio, kkr_name=payload.kkr_name,
+        surname=payload.surname, name=payload.name, patronymic=payload.patronymic,
+        kkr_name=payload.kkr_name,
         group_number=payload.group_number, location=payload.location,
         blocks=payload.blocks, phone=payload.phone,
         vk=payload.vk, tg=payload.tg,
