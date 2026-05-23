@@ -354,6 +354,24 @@ def create_guide(guide: GuideIn, cur: User = Depends(require_admin)):
     return GuideOut(**created.__dict__)
 
 
+@app.post("/guides/{guide_id}", response_model=GuideOut)
+def edit_guide(
+    guide_id: int,
+    guide: GuideIn,
+    cur: User = Depends(require_admin),
+):
+    updated = db.update_guide(
+        guide_id,
+        title=guide.title,
+        owner_block=guide.owner_block,
+        text=guide.text,
+        original_link=guide.original_link,
+    )
+    if not updated:
+        raise HTTPException(404, "Guide not found")
+    return GuideOut(**updated.__dict__)
+
+
 # ═══════════════════════════════════════════════════════════
 #  BLOCKS
 # ═══════════════════════════════════════════════════════════
