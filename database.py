@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, Text, create_engine, text
-from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
+from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker, joinedload
 
 from models import Block as BlockDC, ContactInfo as ContactInfoDC, Guide as GuideDC, User as UserDC
 
@@ -30,6 +30,7 @@ class UserORM(Base):
     banned = Column(Boolean, default=False, nullable=False)
     super_user = Column(Boolean, default=False, nullable=False)
     admin = Column(Boolean, default=False, nullable=False)
+    photo_url = Column(String, nullable=True)
 
     contact = relationship("ContactInfoORM", back_populates="user", uselist=False)
 
@@ -98,6 +99,20 @@ def _ensure_sqlite_users_password_column() -> None:
 
 
 _ensure_sqlite_users_password_column()
+
+
+def _ensure_sqlite_users_photo_url_column() -> None:
+    """Add photo_url to existing SQLite DBs."""
+    with engine.begin() as conn:
+        rows = conn.execute(text("PRAGMA table_info(users)")).fetchall()
+        col_names = {r[1] for r in rows}
+        if "photo_url" not in col_names:
+            conn.execute(
+                text("ALTER TABLE users ADD COLUMN photo_url VARCHAR")
+            )
+
+
+_ensure_sqlite_users_photo_url_column()
 
 
 def _ensure_sqlite_block_hr_column() -> None:
@@ -256,6 +271,7 @@ def _user_orm_to_dc(u: UserORM) -> UserDC:
         kkr_score=u.kkr_score,
         group_number=u.group_number,
         blocks=u.blocks,
+        photo_url=u.photo_url,
         banned=u.banned,
         super_user=u.super_user,
         admin=u.admin,
@@ -278,6 +294,7 @@ def _contact_orm_to_dc(c: ContactInfoORM) -> ContactInfoDC:
         email=c.email,
         budget=c.budget,
         in_profcom=c.in_profcom,
+        photo_url=c.user.photo_url if c.user else None,
     )
 
 
@@ -322,6 +339,99 @@ class Database:
     def _session(self) -> Session:
         return self._SessionLocal()
 
+    # --- Sync Helpers ---
+
+    def _sync_blocks_for_user(self, session: Session, user_id: int, new_blocks_raw: str) -> str:
+        u = session.get(UserORM, user_id)
+        c = session.get(ContactInfoORM, user_id)
+        if not u and not c:
+            return new_blocks_raw
+
+        old_blocks = set(_parse_blocks(u.blocks if u else (c.blocks if c else "")))
+        available_blocks = {b.name for b in session.query(BlockORM.name).all()}
+        requested_blocks = set(_parse_blocks(new_blocks_raw))
+        
+        # Only keep blocks that exist in BlockORM
+        valid_requested_blocks = requested_blocks.intersection(available_blocks)
+        
+        added = valid_requested_blocks - old_blocks
+        removed = old_blocks - valid_requested_blocks
+        
+        for b_name in added:
+            b_orm = session.get(BlockORM, b_name)
+            if b_orm:
+                try:
+                    user_ids = json.loads(b_orm.arr_of_human) if b_orm.arr_of_human else []
+                except json.JSONDecodeError:
+                    user_ids = []
+                if user_id not in user_ids:
+                    user_ids.append(user_id)
+                    b_orm.arr_of_human = json.dumps(user_ids)
+                    b_orm.cnt_of_human = len(user_ids)
+
+        for b_name in removed:
+            b_orm = session.get(BlockORM, b_name)
+            if b_orm:
+                try:
+                    user_ids = json.loads(b_orm.arr_of_human) if b_orm.arr_of_human else []
+                except json.JSONDecodeError:
+                    user_ids = []
+                if user_id in user_ids:
+                    user_ids.remove(user_id)
+                    b_orm.arr_of_human = json.dumps(user_ids)
+                    b_orm.cnt_of_human = len(user_ids)
+
+        final_blocks_str = _format_blocks(sorted(list(valid_requested_blocks)))
+        if u: u.blocks = final_blocks_str
+        if c: c.blocks = final_blocks_str
+        return final_blocks_str
+
+    def _sync_users_for_block(self, session: Session, block_name: str, new_user_ids: list[int]):
+        b = session.get(BlockORM, block_name)
+        if not b: return
+        
+        try:
+            old_user_ids = set(json.loads(b.arr_of_human)) if b.arr_of_human else set()
+        except json.JSONDecodeError:
+            old_user_ids = set()
+            
+        new_user_ids_set = set(new_user_ids)
+        
+        added = new_user_ids_set - old_user_ids
+        removed = old_user_ids - new_user_ids_set
+        
+        for u_id in added:
+            u = session.get(UserORM, u_id)
+            c = session.get(ContactInfoORM, u_id)
+            if u:
+                bl = set(_parse_blocks(u.blocks))
+                bl.add(block_name)
+                u.blocks = _format_blocks(sorted(list(bl)))
+                if c: c.blocks = u.blocks
+            elif c:
+                bl = set(_parse_blocks(c.blocks))
+                bl.add(block_name)
+                c.blocks = _format_blocks(sorted(list(bl)))
+
+        for u_id in removed:
+            u = session.get(UserORM, u_id)
+            c = session.get(ContactInfoORM, u_id)
+            if u:
+                bl = set(_parse_blocks(u.blocks))
+                if block_name in bl:
+                    bl.remove(block_name)
+                    u.blocks = _format_blocks(sorted(list(bl)))
+                if c: c.blocks = u.blocks
+            elif c:
+                bl = set(_parse_blocks(c.blocks))
+                if block_name in bl:
+                    bl.remove(block_name)
+                    c.blocks = _format_blocks(sorted(list(bl)))
+
+        # Update block record itself
+        b.arr_of_human = json.dumps(list(new_user_ids_set))
+        b.cnt_of_human = len(new_user_ids_set)
+
     # --- Users & ContactInfo ---
 
     def create_user_with_contact(
@@ -335,7 +445,8 @@ class Database:
                 hashed_password=user.hashed_password,
                 kkr_score=user.kkr_score,
                 group_number=user.group_number,
-                blocks=user.blocks,
+                blocks="",  # Set via sync
+                photo_url=user.photo_url,
                 banned=user.banned,
                 super_user=user.super_user,
                 admin=user.admin,
@@ -351,7 +462,7 @@ class Database:
                 kkr_name=contact.kkr_name,
                 group_number=contact.group_number,
                 location=contact.location,
-                blocks=contact.blocks,
+                blocks="",  # Set via sync
                 phone=contact.phone,
                 vk=contact.vk,
                 tg=contact.tg,
@@ -360,6 +471,12 @@ class Database:
                 in_profcom=contact.in_profcom,
             )
             session.add(c)
+            
+            # Synchronize blocks
+            initial_blocks = user.blocks or contact.blocks
+            if initial_blocks:
+                self._sync_blocks_for_user(session, u.user_id, initial_blocks)
+
             session.commit()
             session.refresh(u)
 
@@ -397,7 +514,12 @@ class Database:
 
     def get_contact(self, user_id: int) -> Optional[ContactInfoDC]:
         with self._session() as session:
-            c = session.get(ContactInfoORM, user_id)
+            c = (
+                session.query(ContactInfoORM)
+                .options(joinedload(ContactInfoORM.user))
+                .filter(ContactInfoORM.user_id == user_id)
+                .first()
+            )
             if not c:
                 return None
             return _contact_orm_to_dc(c)
@@ -407,8 +529,21 @@ class Database:
             session.query(RefreshTokenORM).filter(RefreshTokenORM.user_id == user_id).delete(
                 synchronize_session=False
             )
+            # Remove from all blocks
             u = session.get(UserORM, user_id)
             if u:
+                user_blocks = _parse_blocks(u.blocks)
+                for b_name in user_blocks:
+                    b_orm = session.get(BlockORM, b_name)
+                    if b_orm:
+                        try:
+                            user_ids = json.loads(b_orm.arr_of_human) if b_orm.arr_of_human else []
+                        except json.JSONDecodeError:
+                            user_ids = []
+                        if user_id in user_ids:
+                            user_ids.remove(user_id)
+                            b_orm.arr_of_human = json.dumps(user_ids)
+                            b_orm.cnt_of_human = len(user_ids)
                 session.delete(u)
             c = session.get(ContactInfoORM, user_id)
             if c:
@@ -420,6 +555,11 @@ class Database:
             u = session.get(UserORM, user_id)
             if not u:
                 return None
+
+            if "blocks" in fields and fields["blocks"] is not None:
+                new_blocks = self._sync_blocks_for_user(session, user_id, fields["blocks"])
+                fields["blocks"] = new_blocks
+
             for k, v in fields.items():
                 if v is None:
                     continue
@@ -434,6 +574,11 @@ class Database:
             c = session.get(ContactInfoORM, user_id)
             if not c:
                 return None
+
+            if "blocks" in fields and fields["blocks"] is not None:
+                new_blocks = self._sync_blocks_for_user(session, user_id, fields["blocks"])
+                fields["blocks"] = new_blocks
+
             for k, v in fields.items():
                 if v is None:
                     continue
@@ -445,12 +590,16 @@ class Database:
 
     def list_contacts(self) -> List[ContactInfoDC]:
         with self._session() as session:
-            rows = session.query(ContactInfoORM).all()
+            rows = (
+                session.query(ContactInfoORM)
+                .options(joinedload(ContactInfoORM.user))
+                .all()
+            )
             return [_contact_orm_to_dc(c) for c in rows]
 
     def filter_contacts(self, **criteria) -> List[ContactInfoDC]:
         with self._session() as session:
-            q = session.query(ContactInfoORM)
+            q = session.query(ContactInfoORM).options(joinedload(ContactInfoORM.user))
             if criteria.get("group_number") is not None:
                 q = q.filter(ContactInfoORM.group_number == criteria["group_number"])
             if criteria.get("blocks") is not None:
@@ -495,10 +644,16 @@ class Database:
                 name=block.name,
                 master=block.master,
                 hr=block.hr,
-                cnt_of_human=block.cnt_of_human,
-                arr_of_human=json.dumps(block.arr_of_human),
+                cnt_of_human=0,
+                arr_of_human="[]",
             )
             session.add(b)
+            session.flush()
+            
+            # If creating a block with humans already listed in dataclass
+            if block.arr_of_human:
+                self._sync_users_for_block(session, block.name, block.arr_of_human)
+
             session.commit()
             session.refresh(b)
             return _block_orm_to_dc(b)
@@ -520,10 +675,11 @@ class Database:
                 b.master = fields["master"]
             if fields.get("hr") is not None:
                 b.hr = fields["hr"]
-            if fields.get("cnt_of_human") is not None:
-                b.cnt_of_human = fields["cnt_of_human"]
+            
             if fields.get("arr_of_human") is not None:
-                b.arr_of_human = json.dumps(fields["arr_of_human"])
+                self._sync_users_for_block(session, name, fields["arr_of_human"])
+                # cnt_of_human is updated inside _sync_users_for_block or we can force it
+                b.cnt_of_human = len(fields["arr_of_human"])
 
             session.commit()
             session.refresh(b)
@@ -533,68 +689,56 @@ class Database:
         with self._session() as session:
             b = session.get(BlockORM, name)
             if b:
+                # Remove this block from all users
+                try:
+                    user_ids = json.loads(b.arr_of_human) if b.arr_of_human else []
+                except json.JSONDecodeError:
+                    user_ids = []
+                
+                for u_id in user_ids:
+                    u = session.get(UserORM, u_id)
+                    c = session.get(ContactInfoORM, u_id)
+                    if u:
+                        bl = set(_parse_blocks(u.blocks))
+                        if name in bl:
+                            bl.remove(name)
+                            u.blocks = _format_blocks(sorted(list(bl)))
+                        if c: c.blocks = u.blocks
+                    elif c:
+                        bl = set(_parse_blocks(c.blocks))
+                        if name in bl:
+                            bl.remove(name)
+                            c.blocks = _format_blocks(sorted(list(bl)))
+
                 session.delete(b)
             session.commit()
 
     def enter_user_to_block(self, user_id: int, block_name: str) -> Optional[BlockDC]:
         with self._session() as session:
             u = session.get(UserORM, user_id)
-            c = session.get(ContactInfoORM, user_id)
-            b = session.get(BlockORM, block_name)
-            if not u or not c or not b:
+            if not u:
                 return None
-
-            try:
-                user_ids = json.loads(b.arr_of_human) if b.arr_of_human else []
-            except json.JSONDecodeError:
-                user_ids = []
-
-            if user_id not in user_ids:
-                user_ids.append(user_id)
-
-            b.arr_of_human = json.dumps(user_ids)
-            b.cnt_of_human = len(user_ids)
-
-            user_blocks = _parse_blocks(u.blocks)
-            if block_name not in user_blocks:
-                user_blocks.append(block_name)
-                u.blocks = _format_blocks(user_blocks)
-
-            contact_blocks = _parse_blocks(c.blocks)
-            if block_name not in contact_blocks:
-                contact_blocks.append(block_name)
-                c.blocks = _format_blocks(contact_blocks)
-
+            
+            blocks = set(_parse_blocks(u.blocks))
+            blocks.add(block_name)
+            self._sync_blocks_for_user(session, user_id, _format_blocks(list(blocks)))
+            
             session.commit()
-            session.refresh(b)
-            return _block_orm_to_dc(b)
+            return self.get_block(block_name)
 
     def exit_user_from_block(self, user_id: int, block_name: str) -> Optional[BlockDC]:
         with self._session() as session:
             u = session.get(UserORM, user_id)
-            c = session.get(ContactInfoORM, user_id)
-            b = session.get(BlockORM, block_name)
-            if not u or not c or not b:
+            if not u:
                 return None
-
-            try:
-                user_ids = json.loads(b.arr_of_human) if b.arr_of_human else []
-            except json.JSONDecodeError:
-                user_ids = []
-
-            user_ids = [uid for uid in user_ids if uid != user_id]
-            b.arr_of_human = json.dumps(user_ids)
-            b.cnt_of_human = len(user_ids)
-
-            user_blocks = [name for name in _parse_blocks(u.blocks) if name != block_name]
-            u.blocks = _format_blocks(user_blocks)
-
-            contact_blocks = [name for name in _parse_blocks(c.blocks) if name != block_name]
-            c.blocks = _format_blocks(contact_blocks)
-
+            
+            blocks = set(_parse_blocks(u.blocks))
+            if block_name in blocks:
+                blocks.remove(block_name)
+            self._sync_blocks_for_user(session, user_id, _format_blocks(list(blocks)))
+            
             session.commit()
-            session.refresh(b)
-            return _block_orm_to_dc(b)
+            return self.get_block(block_name)
 
     def update_guide(self, guide_id: int, **fields) -> Optional[GuideDC]:
         with self._session() as session:

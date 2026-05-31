@@ -21,6 +21,7 @@ from auth import (
     require_admin,         # replaces old require_admin
     require_superuser,     # replaces old require_superuser
 )
+from utils.s3_service import generate_presigned_url
 
 
 app = FastAPI(
@@ -31,11 +32,12 @@ origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
+    "https://85m62kf9-5173.euw.devtunnels.ms"
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -64,6 +66,9 @@ class ContactInfoIn(BaseModel):
     tg: str = ""
     budget: bool = False
     in_profcom: bool = False
+    photo_url: Optional[str] = None
+
+
 
 
 class RegisterIn(BaseModel):
@@ -88,6 +93,7 @@ class UserOut(BaseModel):
     kkr_score: int
     group_number: int
     blocks: str
+    photo_url: Optional[str] = None
     banned: bool
     super_user: bool
     admin: bool
@@ -100,6 +106,15 @@ class ProfileOut(UserOut):
 
 class ContactInfoOut(ContactInfoIn):
     user_id: int
+    photo_url: Optional[str] = None
+
+
+class MeOut(ContactInfoOut):
+    user_name: str
+    kkr_score: int
+    banned: bool
+    super_user: bool
+    admin: bool
 
 
 class GuideIn(BaseModel):
@@ -161,6 +176,7 @@ class ProfileUpdate(BaseModel):
     email: Optional[EmailStr] = None
     budget: Optional[bool] = None
     in_profcom: Optional[bool] = None
+    photo_url: Optional[str] = None
 
 
 class ContactFilter(BaseModel):
@@ -168,6 +184,15 @@ class ContactFilter(BaseModel):
     blocks: Optional[str] = None
     in_profcom: Optional[bool] = None
     budget: Optional[bool] = None
+
+
+class PresignedUrlRequest(BaseModel):
+    folder: str
+    content_type: str  # например, 'image/jpeg'
+
+class UrlsResponse(BaseModel):
+    upload_url: str
+    public_url: str
 
 
 # ═══════════════════════════════════════════════════════════
@@ -282,13 +307,22 @@ def logout_all(cur: User = Depends(get_current_user)):
 #  PROFILE   (protected by Bearer token now)
 # ═══════════════════════════════════════════════════════════
 
-@app.get("/profile/me", response_model=ProfileOut)
+@app.get("/profile/me", response_model=MeOut)
 def my_profile(cur: User = Depends(get_current_user)):
     """Return the profile of the currently authenticated user."""
     contact = db.get_contact(cur.user_id)
     if not contact:
         raise HTTPException(500, "Contact info missing for user")
-    return ProfileOut(**cur.__dict__, email=contact.email, tg=contact.tg)
+    
+    # Combine contact info with user-level flags
+    return MeOut(
+        **contact.__dict__,
+        user_name=cur.user_name,
+        kkr_score=cur.kkr_score,
+        banned=cur.banned,
+        super_user=cur.super_user,
+        admin=cur.admin
+    )
 
 
 @app.get("/profile/{user_id}", response_model=ProfileOut)
@@ -324,7 +358,12 @@ def update_profile(
         email=payload.email, budget=payload.budget,
         in_profcom=payload.in_profcom,
     )
-    db.update_user(user_id, group_number=payload.group_number, blocks=payload.blocks)
+    db.update_user(
+        user_id, 
+        group_number=payload.group_number, 
+        blocks=payload.blocks, 
+        photo_url=payload.photo_url
+    )
     updated = db.get_user(user_id)
     return UserOut(**updated.__dict__)
 
@@ -455,3 +494,23 @@ def filter_contacts(filt: ContactFilter, cur: User = Depends(require_admin)):
         in_profcom=filt.in_profcom, budget=filt.budget,
     )
     return [ContactInfoOut(**c.__dict__) for c in contacts]
+
+
+# ═══════════════════════════════════════════════════════════
+#  UPLOAD
+# ═══════════════════════════════════════════════════════════
+
+@app.post("/upload/presigned-url", response_model=UrlsResponse)
+def get_presigned_url(
+    payload: PresignedUrlRequest,
+    cur: User = Depends(get_current_user)
+):
+    """
+    Generate a presigned URL for direct S3 upload.
+    If folder is 'guides', only admins can upload.
+    """
+    if payload.folder == 'guides' and not cur.admin:
+        raise HTTPException(403, "Only admins can upload to 'guides' folder")
+
+    urls = generate_presigned_url(payload.folder, payload.content_type)
+    return urls

@@ -20,6 +20,7 @@ class ContactInfo:
     tg: str = ""               # ТГ
     budget: bool = False       # Бюджет (True) / платка (False)
     in_profcom: bool = False   # Состоит ли в профкоме
+    photo_url: Optional[str] = None
 
 
 @dataclass
@@ -30,6 +31,7 @@ class User:
     kkr_score: int = 0
     group_number: str = ""
     blocks: str = ""
+    photo_url: Optional[str] = None
     banned: bool = False
     super_user: bool = False
     admin: bool = False
