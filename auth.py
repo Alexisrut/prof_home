@@ -26,7 +26,7 @@ REFRESH_TTL_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # tokenUrl is only used by the Swagger "Authorize" button
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 
 # ═══════════════════════════════════════════════════════════

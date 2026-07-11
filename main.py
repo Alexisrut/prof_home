@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, APIRouter
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr, Field
 
@@ -28,11 +28,12 @@ app = FastAPI(
     title="Profcom backend",
     )
 
+router = APIRouter(prefix="/api")
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
     "http://localhost:3000",
-    "https://85m62kf9-5173.euw.devtunnels.ms"
+    "http://localhost:80"
 ]
 
 app.add_middleware(
@@ -199,7 +200,7 @@ class UrlsResponse(BaseModel):
 #  AUTH ENDPOINTS  (NEW)
 # ═══════════════════════════════════════════════════════════
 
-@app.post("/auth/register", response_model=TokenPair, status_code=201)
+@router.post("/auth/register", response_model=TokenPair, status_code=201)
 def register(payload: RegisterIn):
     """
     Register a new user.
@@ -259,7 +260,7 @@ def register(payload: RegisterIn):
     return create_token_pair(created.user_id)
 
 
-@app.post("/auth/login", response_model=TokenPair)
+@router.post("/auth/login", response_model=TokenPair)
 def login(body: LoginIn):
     """
     Authenticate with email + password → get tokens.
@@ -277,7 +278,7 @@ def login(body: LoginIn):
     return create_token_pair(user.user_id)
 
 
-@app.post("/auth/refresh", response_model=TokenPair)
+@router.post("/auth/refresh", response_model=TokenPair)
 def refresh(body: RefreshRequest):
     """
     Exchange a refresh token for a new access + refresh pair.
@@ -286,7 +287,7 @@ def refresh(body: RefreshRequest):
     return refresh_tokens(body.refresh_token)
 
 
-@app.post("/auth/logout")
+@router.post("/auth/logout")
 def logout(
     body: RefreshRequest,
     cur: User = Depends(get_current_user),    # must be authenticated
@@ -296,7 +297,7 @@ def logout(
     return {"detail": "Logged out"}
 
 
-@app.post("/auth/logout-all")
+@router.post("/auth/logout-all")
 def logout_all(cur: User = Depends(get_current_user)):
     """Revoke ALL refresh tokens for the current user."""
     revoke_all_user_tokens(cur.user_id)
@@ -307,7 +308,7 @@ def logout_all(cur: User = Depends(get_current_user)):
 #  PROFILE   (protected by Bearer token now)
 # ═══════════════════════════════════════════════════════════
 
-@app.get("/profile/me", response_model=MeOut)
+@router.get("/profile/me", response_model=MeOut)
 def my_profile(cur: User = Depends(get_current_user)):
     """Return the profile of the currently authenticated user."""
     contact = db.get_contact(cur.user_id)
@@ -325,7 +326,7 @@ def my_profile(cur: User = Depends(get_current_user)):
     )
 
 
-@app.get("/profile/{user_id}", response_model=ProfileOut)
+@router.get("/profile/{user_id}", response_model=ProfileOut)
 def get_profile(user_id: int):
     user = db.get_user(user_id)
     if not user:
@@ -336,7 +337,7 @@ def get_profile(user_id: int):
     return ProfileOut(**user.__dict__, email=contact.email, tg=contact.tg)
 
 
-@app.patch("/profile/{user_id}", response_model=UserOut)
+@router.patch("/profile/{user_id}", response_model=UserOut)
 def update_profile(
     user_id: int,
     payload: ProfileUpdate,
@@ -368,7 +369,7 @@ def update_profile(
     return UserOut(**updated.__dict__)
 
 
-@app.delete("/profile/{user_id}")
+@router.delete("/profile/{user_id}")
 def delete_user(user_id: int, cur: User = Depends(require_superuser)):
     if not db.get_user(user_id):
         raise HTTPException(404, "User not found")
@@ -380,12 +381,12 @@ def delete_user(user_id: int, cur: User = Depends(require_superuser)):
 #  GUIDES
 # ═══════════════════════════════════════════════════════════
 
-@app.get("/guides", response_model=List[GuideOut])
+@router.get("/guides", response_model=List[GuideOut])
 def list_guides():
     return [GuideOut(**g.__dict__) for g in db.list_guides()]
 
 
-@app.post("/guides", response_model=GuideOut)
+@router.post("/guides", response_model=GuideOut)
 def create_guide(guide: GuideIn, cur: User = Depends(require_admin)):
     g = Guide(guide_id=0, title=guide.title, owner_block=guide.owner_block,
               text=guide.text, original_link=guide.original_link)
@@ -393,7 +394,7 @@ def create_guide(guide: GuideIn, cur: User = Depends(require_admin)):
     return GuideOut(**created.__dict__)
 
 
-@app.post("/guides/{guide_id}", response_model=GuideOut)
+@router.post("/guides/{guide_id}", response_model=GuideOut)
 def edit_guide(
     guide_id: int,
     guide: GuideIn,
@@ -415,12 +416,12 @@ def edit_guide(
 #  BLOCKS
 # ═══════════════════════════════════════════════════════════
 
-@app.get("/blocks", response_model=List[BlockOut])
+@router.get("/blocks", response_model=List[BlockOut])
 def list_blocks():
     return [BlockOut(**b.__dict__) for b in db.list_blocks()]
 
 
-@app.post("/blocks", response_model=BlockOut)
+@router.post("/blocks", response_model=BlockOut)
 def create_block(payload: BlockIn, cur: User = Depends(require_superuser)):
     existing = db.get_block(payload.name)
     if existing:
@@ -436,7 +437,7 @@ def create_block(payload: BlockIn, cur: User = Depends(require_superuser)):
     return BlockOut(**created.__dict__)
 
 
-@app.patch("/blocks/{block_name}", response_model=BlockOut)
+@router.patch("/blocks/{block_name}", response_model=BlockOut)
 def update_block(
     block_name: str,
     payload: BlockUpdate,
@@ -454,7 +455,7 @@ def update_block(
     return BlockOut(**updated.__dict__)
 
 
-@app.delete("/blocks/{block_name}")
+@router.delete("/blocks/{block_name}")
 def delete_block(block_name: str, cur: User = Depends(require_superuser)):
     if not db.get_block(block_name):
         raise HTTPException(404, "Block not found")
@@ -462,7 +463,7 @@ def delete_block(block_name: str, cur: User = Depends(require_superuser)):
     return {"status": "deleted"}
 
 
-@app.post("/blocks/{block_name}/enter", response_model=BlockOut)
+@router.post("/blocks/{block_name}/enter", response_model=BlockOut)
 def enter_block(block_name: str, cur: User = Depends(get_current_user)):
     updated = db.enter_user_to_block(cur.user_id, block_name)
     if not updated:
@@ -470,7 +471,7 @@ def enter_block(block_name: str, cur: User = Depends(get_current_user)):
     return BlockOut(**updated.__dict__)
 
 
-@app.post("/blocks/{block_name}/exit", response_model=BlockOut)
+@router.post("/blocks/{block_name}/exit", response_model=BlockOut)
 def exit_block(block_name: str, cur: User = Depends(get_current_user)):
     updated = db.exit_user_from_block(cur.user_id, block_name)
     if not updated:
@@ -482,12 +483,12 @@ def exit_block(block_name: str, cur: User = Depends(get_current_user)):
 #  CONTACTS
 # ═══════════════════════════════════════════════════════════
 
-@app.get("/contacts", response_model=List[ContactInfoOut])
+@router.get("/contacts", response_model=List[ContactInfoOut])
 def get_all_contacts():
     return [ContactInfoOut(**c.__dict__) for c in db.list_contacts()]
 
 
-@app.post("/contacts/filter", response_model=List[ContactInfoOut])
+@router.post("/contacts/filter", response_model=List[ContactInfoOut])
 def filter_contacts(filt: ContactFilter, cur: User = Depends(require_admin)):
     contacts = db.filter_contacts(
         group_number=filt.group_number, blocks=filt.blocks,
@@ -500,7 +501,7 @@ def filter_contacts(filt: ContactFilter, cur: User = Depends(require_admin)):
 #  UPLOAD
 # ═══════════════════════════════════════════════════════════
 
-@app.post("/upload/presigned-url", response_model=UrlsResponse)
+@router.post("/upload/presigned-url", response_model=UrlsResponse)
 def get_presigned_url(
     payload: PresignedUrlRequest,
     cur: User = Depends(get_current_user)
@@ -514,3 +515,5 @@ def get_presigned_url(
 
     urls = generate_presigned_url(payload.folder, payload.content_type)
     return urls
+
+app.include_router(router)

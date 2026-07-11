@@ -1,7 +1,0 @@
-rules:
-  - expressions:
-      - req.Header.Get("Host") == "85m62kf9-5173.euw.devtunnels.ms"
-    actions:
-      - type: reverse_proxy
-        config:
-          url: "http://127.0.0.1:3000"

@@ -3,6 +3,9 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from settings import settings 
+from main import ContactInfo, User, hash_password
+
 from database import db
 from models import Guide
 
@@ -41,5 +44,48 @@ def preset_guides():
         except Exception as err:
             print(f"Ошибка при обработке файла {name}.md: {err}")
 
+def set_admin():
+
+    payload = {
+        "name": settings.ADMIN_NAME,
+        "password": settings.ADMIN_PASSWORD,
+        "surname": "",
+        "patronymic": "",
+        "group_number": 0,
+        "tg": "",
+        "email": f'{settings.ADMIN_NAME}@example.com',
+        "user_name": settings.ADMIN_NAME
+    }
+
+    contact_model = ContactInfo(
+        user_id=0,
+        surname=payload["surname"],
+        name=payload["name"],
+        patronymic=payload["patronymic"],
+        kkr_name="",
+        group_number=str(payload["group_number"]),
+        location="",
+        blocks="",
+        phone="",
+        vk="",
+        tg=payload["tg"],
+        email=str(payload["email"]),
+        budget=False,
+        in_profcom=True,
+    )
+    user_model = User(
+        user_id=0,
+        user_name=payload["user_name"],
+        hashed_password=hash_password(payload["password"]),   # ← hash!
+        kkr_score=0,
+        group_number=str(payload["group_number"]),
+        blocks="",
+        banned=False,
+        super_user=True,
+        admin=True,
+    )
+    db.create_user_with_contact(contact_model, user_model)
+
 if __name__ == "__main__":
     preset_guides()
+    set_admin()

@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     S3_SECRET_KEY: str = ""
     S3_BUCKET_NAME: str = ""
     S3_TENANT_ID: str = ""
+    ADMIN_NAME: str = ""
+    ADMIN_PASSWORD: str = ""
     
 
     model_config = SettingsConfigDict(
